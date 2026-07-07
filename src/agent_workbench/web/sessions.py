@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
+import re
+from typing import List, Optional
 
 from flask import (
     Blueprint,
@@ -83,6 +84,18 @@ def _resolve_binding(session) -> Optional[object]:
 
 def _latest_profiles_for_picker() -> list:
     return ProfileService(get_db()).list_latest_profiles()
+
+
+def _parse_agent_mention(body: str) -> Optional[str]:
+    """Extract an @agent_name from the message body, if present.
+
+    Looks for ``@word`` at the start of the body or after whitespace.
+    Returns the agent name (without ``@``) or ``None``.
+    """
+    m = re.search(r"(?:^|\s)@(\w[\w-]*)", body)
+    if m:
+        return m.group(1)
+    return None
 
 
 @bp.route("/sessions/<session_id>/config", methods=["GET"])
@@ -207,12 +220,20 @@ def post_message(session_id: str):
             channel_kind="system",
             title="web-default",
         )
-
     payload = {
         "envelope": "user_web_post",
         "body": body,
         "from": user_id,
     }
+
+    # Parse @agent_name from the message body
+    target_agent_name = _parse_agent_mention(body)
+    # If the user typed @agent_name, strip it from the body sent to the LLM
+    clean_body = body
+    if target_agent_name:
+        # Remove @target_agent_name from the body (case-insensitive)
+        pattern = re.compile(r"\B@" + re.escape(target_agent_name) + r"\b", re.IGNORECASE)
+        clean_body = pattern.sub("", body).strip()
 
     try:
         routing.route_message(
@@ -227,7 +248,21 @@ def post_message(session_id: str):
             payload_ref=json.dumps(payload),
         )
         participants = get_participant_service().list_active_participant_details(session_id)
-        for participant in participants:
+
+        # Filter to only the mentioned agent, or dispatch to all
+        if target_agent_name:
+            filtered = [
+                p for p in participants
+                if p["agent_name"].lower() == target_agent_name.lower()
+            ]
+            if not filtered:
+                flash(f"Agent {target_agent_name!r} not found in this session.", "error")
+                return redirect(url_for("sessions.show_session", session_id=session_id))
+            dispatch_targets = filtered
+        else:
+            dispatch_targets = participants
+
+        for participant in dispatch_targets:
             routing.route_orchestrator_dispatch(
                 workspace_id=session.workspace_id,
                 channel_id=channel.channel_id,
@@ -244,20 +279,22 @@ def post_message(session_id: str):
                     }
                 ),
             )
-        if participants:
+        if dispatch_targets:
             mode = current_app.config.get("WORKBENCH_AGENT_RESPONSE_MODE", "async")
             if mode == "sync":
                 AgentRuntimeService(get_db()).generate_for_session(
                     session_id=session.session_id,
-                    user_body=body,
+                    user_body=clean_body,
                     user_id=user_id,
+                    target_agent_name=target_agent_name,
                 )
             else:
                 launch_agent_responses_async(
                     db_path=current_app.config["WORKBENCH_DB_PATH"],
                     session_id=session.session_id,
-                    user_body=body,
+                    user_body=clean_body,
                     user_id=user_id,
+                    target_agent_name=target_agent_name,
                 )
     except ValueError as e:
         flash(f"Routing rejected the message: {e}", "error")
@@ -307,6 +344,24 @@ def update_max_tool_iterations(session_id: str):
     try:
         session_svc.update_session_max_tool_iterations(session_id, val)
         flash(f"Tool call limit updated to {val}.", "success")
+    except (SessionNotFoundError, ValueError) as e:
+        flash(str(e), "error")
+    return redirect(url_for("sessions.session_config", session_id=session_id))
+
+
+@bp.route("/sessions/<session_id>/max-auto-turns", methods=["POST"])
+def update_max_auto_turns(session_id: str):
+    """Update the max_auto_turns for a session."""
+    session_svc: SessionService = get_session_service()
+    raw = (request.form.get("max_auto_turns") or "").strip()
+    try:
+        val = int(raw)
+    except (ValueError, TypeError):
+        flash("Invalid value: must be a non-negative integer.", "error")
+        return redirect(url_for("sessions.session_config", session_id=session_id))
+    try:
+        session_svc.update_session_max_auto_turns(session_id, val)
+        flash(f"Auto-turn limit updated to {val}.", "success")
     except (SessionNotFoundError, ValueError) as e:
         flash(str(e), "error")
     return redirect(url_for("sessions.session_config", session_id=session_id))

@@ -480,6 +480,42 @@
     .toolcall-status-dot.running { background: var(--accent); animation: pulse 1s infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
+    /* ── Tool Confirmation Buttons ── */
+    .toolcall-confirm-row {
+      margin-top: 6px;
+      display: flex;
+      gap: 4px;
+    }
+    .toolcall-confirm-row .btn-sm {
+      font-size: 11px;
+      padding: 3px 8px;
+    }
+    .toolcall-confirm-row .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .toolcall-confirm-row .btn-primary:hover { filter: brightness(1.1); }
+    .toolcall-confirm-resolved span {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--ink-muted);
+      margin-top: 4px;
+    }
+    .toolcall-result-badge {
+      font-size: 10px !important;
+      margin-left: 4px;
+    }
+
+    /* ── Work Status Text (inside agent bubbles) ── */
+    .work-status-text {
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .work-status-text.working { color: var(--accent); }
+    .work-status-text.completed { color: var(--chat); }
+    .work-status-text.stopped { color: var(--warn-ink); }
+    .msg-work-bubble { cursor: pointer; }
+    .msg-work-bubble:hover { border-color: var(--accent) !important; }
+
     /* ── Tool Call Detail Panel (right sidebar) ── */
     .toolcall-detail-panel {
       width: 0;

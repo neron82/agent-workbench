@@ -49,6 +49,44 @@ class TestCreateSession:
         assert s.task_spec_id is None
         assert s.agent_profile_binding_id is None
 
+    def test_create_minimal_auto_turns_defaults(self, svc, workspace_id):
+        """max_auto_turns defaults: chat=0, research=3, work=5."""
+        chat = svc.create_session(workspace_id=workspace_id, session_type="chat")
+        assert chat.max_auto_turns == 0
+
+        research = svc.create_session(workspace_id=workspace_id, session_type="research")
+        assert research.max_auto_turns == 3
+
+        work = svc.create_session(workspace_id=workspace_id, session_type="work")
+        assert work.max_auto_turns == 5
+
+    def test_create_minimal_tool_iterations_defaults(self, svc, workspace_id):
+        """max_tool_iterations defaults: chat=5, research=10, work=25."""
+        chat = svc.create_session(workspace_id=workspace_id, session_type="chat")
+        assert chat.max_tool_iterations == 5
+
+        research = svc.create_session(workspace_id=workspace_id, session_type="research")
+        assert research.max_tool_iterations == 10
+
+        work = svc.create_session(workspace_id=workspace_id, session_type="work")
+        assert work.max_tool_iterations == 25
+
+    def test_create_explicit_auto_turns_override(self, svc, workspace_id):
+        """Explicitly passing max_auto_turns overrides the default."""
+        s = svc.create_session(
+            workspace_id=workspace_id, session_type="chat",
+            max_auto_turns=10,
+        )
+        assert s.max_auto_turns == 10
+
+    def test_create_explicit_tool_iterations_override(self, svc, workspace_id):
+        """Explicitly passing max_tool_iterations overrides the default."""
+        s = svc.create_session(
+            workspace_id=workspace_id, session_type="work",
+            max_tool_iterations=50,
+        )
+        assert s.max_tool_iterations == 50
+
     def test_create_with_invalid_type_raises(self, svc, workspace_id):
         with pytest.raises(ValueError, match="Invalid session_type"):
             svc.create_session(workspace_id=workspace_id, session_type="bogus")
@@ -122,6 +160,28 @@ class TestUpdateStatus:
     def test_update_status_missing_raises(self, svc):
         with pytest.raises(SessionNotFoundError):
             svc.update_session_status("nope", "done")
+
+
+class TestUpdateMaxAutoTurns:
+    def test_update_max_auto_turns(self, svc, workspace_id):
+        s = svc.create_session(workspace_id=workspace_id, session_type="chat")
+        updated = svc.update_session_max_auto_turns(s.session_id, 5)
+        assert updated.max_auto_turns == 5
+        assert svc.get_session(s.session_id).max_auto_turns == 5
+
+    def test_update_max_auto_turns_zero(self, svc, workspace_id):
+        s = svc.create_session(workspace_id=workspace_id, session_type="work")
+        updated = svc.update_session_max_auto_turns(s.session_id, 0)
+        assert updated.max_auto_turns == 0
+
+    def test_update_max_auto_turns_negative_raises(self, svc, workspace_id):
+        s = svc.create_session(workspace_id=workspace_id, session_type="chat")
+        with pytest.raises(ValueError, match="must be >= 0"):
+            svc.update_session_max_auto_turns(s.session_id, -1)
+
+    def test_update_max_auto_turns_missing_session_raises(self, svc):
+        with pytest.raises(SessionNotFoundError):
+            svc.update_session_max_auto_turns("nope", 5)
 
 
 class TestAssignTaskSpec:

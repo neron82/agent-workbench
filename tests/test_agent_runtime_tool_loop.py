@@ -331,6 +331,231 @@ class TestOpenAIToolLoop:
         assert "tools" not in captured[0]
 
 
+# ── Auto-turn chain tests ────────────────────────────────────────────────
+
+
+def _seed_session_with_auto_turns(db, max_auto_turns=5):
+    """Seed a session with 2 agents (Alpha, Beta) and auto-turns enabled.
+
+    Agents are added in order Beta, Alpha so that Alpha (who contains the
+    @mention) is the LAST participant in the details list, meaning the
+    auto-turn loop checks Alpha's reply for @mentions.
+    """
+    ws = WorkspaceRepository(db).create(tenant_id="t1", name="t")
+    db.commit()
+    ch = ChannelRepository(db).create(
+        workspace_id=ws.workspace_id, channel_kind="chat", title="t",
+    )
+    db.commit()
+    sess = SessionExtensionRepository(db).create(
+        workspace_id=ws.workspace_id, session_type="work",
+        max_auto_turns=max_auto_turns,
+    )
+    db.commit()
+    ChannelRepository(db).update_active_session(
+        ch.channel_id, active_session_id=sess.session_id,
+    )
+    db.commit()
+
+    provider = ProviderRepository(db).create(
+        name="p", provider_kind="openai_compatible", endpoint_url="http://stub/v1",
+        api_key_env_var=None, default_model="stub-model",
+    )
+    profile_a = ProfileService(db).create_profile(
+        name="Alpha", provider=provider.provider_id, model="stub-model",
+        function="operator", harness="shell",
+    )
+    profile_b = ProfileService(db).create_profile(
+        name="Beta", provider=provider.provider_id, model="stub-model",
+        function="operator", harness="shell",
+    )
+    db.commit()
+
+    # Add Beta first, Alpha second so Alpha is last in the details list
+    ParticipantService(db).add_participant(
+        session_id=sess.session_id, agent_profile_id=profile_b.agent_profile_id,
+        participant_role="member", added_by="user",
+    )
+    ParticipantService(db).add_participant(
+        session_id=sess.session_id, agent_profile_id=profile_a.agent_profile_id,
+        participant_role="member", added_by="user",
+    )
+    return ws.workspace_id, ch.channel_id, sess.session_id
+
+
+class TestAutoTurnChain:
+    """Tests for the iterative agent auto-turn feature (max_auto_turns > 0)."""
+
+    def test_auto_turn_chain_continues_on_at_mention(self, db):
+        """When max_auto_turns > 0 and an agent's reply contains @mention
+        of another participant, the mentioned agent is auto-dispatched."""
+        ws, ch, sid = _seed_session_with_auto_turns(db, max_auto_turns=5)
+        responses = [
+            _FakeResp({"choices": [{"message": {"role": "assistant", "content": "Sure, I can help"}}]}),
+            _FakeResp({"choices": [{"message": {"role": "assistant", "content": "Let me check with @Beta"}}]}),
+            _FakeResp({"choices": [{"message": {"role": "assistant", "content": "Here's what I found"}}]}),
+        ]
+        call_count = 0
+
+        def fake_urlopen(req, timeout):
+            nonlocal call_count
+            resp = responses[call_count]
+            call_count += 1
+            return resp
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            AgentRuntimeService(db).generate_for_session(
+                session_id=sid, user_body="hello", user_id="user",
+            )
+
+        # 3 calls: Beta (initial), Alpha (initial), Beta (auto-turn)
+        assert call_count == 3
+        # All 3 replies should be routed as conversation messages
+        rows = RoutedMessageRepository(db).list_by_session(sid)
+        conv_msgs = [r for r in rows if r.message_kind == "conversation"]
+        assert len(conv_msgs) == 3
+        # The last message is the auto-triggered Beta reply
+        last_payload = conv_msgs[-1].payload_ref or ""
+        assert "Here's what I found" in last_payload
+        assert "Beta" in last_payload
+
+    def test_no_auto_turn_when_max_auto_turns_is_zero(self, db):
+        """Default max_auto_turns=0 means no auto-turn chain runs,
+        even if an agent's reply contains @mention."""
+        ws, ch, sid = _seed_session_with_auto_turns(db, max_auto_turns=0)
+        responses = [
+            _FakeResp({"choices": [{"message": {"role": "assistant", "content": "Sure, I can help"}}]}),
+            _FakeResp({"choices": [{"message": {"role": "assistant", "content": "Check with @Beta"}}]}),
+        ]
+        call_count = 0
+
+        def fake_urlopen(req, timeout):
+            nonlocal call_count
+            resp = responses[call_count]
+            call_count += 1
+            return resp
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            AgentRuntimeService(db).generate_for_session(
+                session_id=sid, user_body="hi", user_id="user",
+            )
+
+        # Only 2 calls: both agents respond, no auto-turn
+        assert call_count == 2
+        rows = RoutedMessageRepository(db).list_by_session(sid)
+        conv_msgs = [r for r in rows if r.message_kind == "conversation"]
+        assert len(conv_msgs) == 2
+
+    def test_auto_turn_respects_max_auto_turns_limit(self, db):
+        """The chain stops after max_auto_turns auto-turns, even if
+        @mentions keep appearing."""
+        ws, ch, sid = _seed_session_with_auto_turns(db, max_auto_turns=2)
+        call_count = 0
+
+        def fake_urlopen(req, timeout):
+            nonlocal call_count
+            call_count += 1
+            # Beta (first participant) says "Ask @Alpha"
+            # Alpha (second participant) says "Ask @Beta"
+            # → auto-turn chain bounces between them
+            if call_count % 2 == 1:  # odd calls: Beta's turn
+                return _FakeResp({"choices": [{"message": {"role": "assistant", "content": "Ask @Alpha"}}]})
+            else:  # even calls: Alpha's turn
+                return _FakeResp({"choices": [{"message": {"role": "assistant", "content": "Ask @Beta"}}]})
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            AgentRuntimeService(db).generate_for_session(
+                session_id=sid, user_body="start", user_id="user",
+            )
+
+        # 4 calls: 2 initial + 2 auto-turns (max_auto_turns=2)
+        rows = RoutedMessageRepository(db).list_by_session(sid)
+        conv_msgs = [r for r in rows if r.message_kind == "conversation"]
+        # 2 initial + 2 auto-turns = 4 messages
+        assert len(conv_msgs) == 4, f"Expected 4 messages, got {len(conv_msgs)}"
+
+    def test_auto_turn_self_loop_guard(self, db):
+        """An agent mentioning itself does NOT trigger an auto-turn."""
+        ws, ch, sid = _seed_session_with_auto_turns(db, max_auto_turns=5)
+        responses = [
+            # Beta (added first) replies
+            _FakeResp({"choices": [{"message": {"role": "assistant", "content": "I'm Beta, @Beta here"}}]}),
+            # Alpha (added second) replies
+            _FakeResp({"choices": [{"message": {"role": "assistant", "content": "I'm Alpha, @Alpha says hi"}}]}),
+        ]
+        call_count = 0
+
+        def fake_urlopen(req, timeout):
+            nonlocal call_count
+            resp = responses[call_count]
+            call_count += 1
+            return resp
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            AgentRuntimeService(db).generate_for_session(
+                session_id=sid, user_body="hi", user_id="user",
+            )
+
+        # Only 2 calls — self-mentions are not followed
+        assert call_count == 2
+
+    def test_auto_turn_skipped_when_target_agent_name_set(self, db):
+        """When target_agent_name is set (selective dispatch), the
+        auto-turn chain is not entered."""
+        ws, ch, sid = _seed_session_with_auto_turns(db, max_auto_turns=5)
+        responses = [
+            _FakeResp({"choices": [{"message": {"role": "assistant", "content": "Check with @Beta"}}]}),
+        ]
+        call_count = 0
+
+        # Disable all shell tools so no tool calls interfere
+        for t in ToolRepository(db).list_for_harness("shell"):
+            ToolRepository(db).update(t.tool_id, is_enabled=False)
+
+        def fake_urlopen(req, timeout):
+            nonlocal call_count
+            resp = responses[call_count]
+            call_count += 1
+            return resp
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            AgentRuntimeService(db).generate_for_session(
+                session_id=sid, user_body="hey @Alpha", user_id="user",
+                target_agent_name="Alpha",
+            )
+
+        # Only 1 call: selective dispatch to Alpha, no auto-turn
+        assert call_count == 1
+
+    def test_auto_turn_chain_stops_when_target_not_found(self, db):
+        """If the @mention targets an agent not in the session, the
+        chain ends without error."""
+        ws, ch, sid = _seed_session_with_auto_turns(db, max_auto_turns=5)
+        # Disable all shell tools
+        for t in ToolRepository(db).list_for_harness("shell"):
+            ToolRepository(db).update(t.tool_id, is_enabled=False)
+
+        responses = [
+            _FakeResp({"choices": [{"message": {"role": "assistant", "content": "Sure, I can help"}}]}),
+            _FakeResp({"choices": [{"message": {"role": "assistant", "content": "Let me ask @Nonexistent"}}]}),
+        ]
+        call_count = 0
+
+        def fake_urlopen(req, timeout):
+            nonlocal call_count
+            resp = responses[call_count]
+            call_count += 1
+            return resp
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            AgentRuntimeService(db).generate_for_session(
+                session_id=sid, user_body="go", user_id="user",
+            )
+
+        # 2 calls: both agents respond, auto-turn finds no target → chain ends
+        assert call_count == 2
+
+
 class TestSeedBuiltinTools:
     def test_builtin_seeded_idempotently(self, tmp_path):
         """Use a fresh DB to verify the seeder from scratch.

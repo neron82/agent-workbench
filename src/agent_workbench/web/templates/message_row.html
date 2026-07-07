@@ -5,7 +5,7 @@
    1. Regular messages (user/agent/system) — iMessage-style bubbles
    2. Tool confirmation requests — compressed summary
    3. Tool results — compressed summary with status dot
-   4. Agent work steps — compressed summary, clickable for detail panel
+   4. Agent work steps — single bubble per agent, click to open side panel
    ------------------------------------------------------------------------- #}
 {% set role = bubble_role(message) %}
 {% set name = bubble_display_name(message, participants or {}) %}
@@ -17,25 +17,40 @@
   {% if _maybe is mapping %}{% set _parsed = _maybe %}{% endif %}
 {% endif %}
 
-{# ── Agent Work Step ── #}
+{# ── Agent Work Step (batched — one bubble per agent) ── #}
 {% if _parsed.get('envelope') == 'agent_work' %}
-  {% set _inv_id = _parsed.get('invocation_id', '') %}
-  {% set _tool_name = _parsed.get('tool_name', '?') %}
-  {% set _step_status = _parsed.get('status', 'completed') %}
-  {% set _iteration = _parsed.get('iteration', 0) %}
-  <div class="msg msg-toolcall" data-id="{{ message.routed_message_id }}" data-created-at="{{ message.created_at }}">
-    <div class="msg-bubble" onclick="openWorkPanel('{{ _inv_id }}', '{{ _tool_name }}', {{ _parsed.get('tool_arguments', {}) | tojson }}, {{ _parsed.get('tool_result', '') | tojson }}, '{{ _step_status }}')">
-      <div class="toolcall-summary">
-        <span class="toolcall-icon toolcall-icon-{{ _parsed.get('tool_harness_type', 'shell') }}">⚡</span>
-        <span class="toolcall-name">{{ _tool_name }}</span>
-        <span class="muted" style="font-size:10px;">#{{ _iteration }}</span>
-        <span class="toolcall-status">
-          <span class="toolcall-status-dot {{ 'completed' if _step_status == 'completed' else 'failed' }}"></span>
-          <span class="badge badge-{{ _step_status }}" style="font-size:10px; margin-left:4px;">{{ _step_status }}</span>
-        </span>
+  {% set _agent_name = _parsed.get('agent_name', 'agent') %}
+  {% set _steps = _parsed.get('steps', []) %}
+  {% set _work_status = _parsed.get('status', 'working') %}
+  {% set _step_count = _steps | length %}
+  {% set _msg_id = message.routed_message_id %}
+  {% set _initials = _agent_name[0] | upper %}
+  {# Build a JSON-safe list of steps for the data attribute #}
+  {% set _steps_json = _steps | tojson %}
+  {% set _status_label = 'working…' if _work_status == 'working' else 'done work' %}
+
+  {# Only show if we have steps — or if this is a "working" bubble shown during agent activity #}
+  {% if _steps or _work_status == 'working' %}
+  <div class="msg msg-other" data-id="{{ _msg_id }}" data-created-at="{{ message.created_at }}">
+    <div class="msg-avatar msg-avatar-agent">{{ _initials }}</div>
+    <div class="msg-bubble msg-work-bubble"
+         data-work-agent="{{ _agent_name }}"
+         data-work-steps='{{ _steps_json }}'
+         data-work-msg-id="{{ _msg_id }}"
+         onclick="openWorkPanelFromBubble(this)">
+      <div class="msg-header">
+        <span class="msg-name">{{ _agent_name }}</span>
+        <span class="msg-time">{{ bubble_time(message.created_at) }}</span>
+      </div>
+      <div class="msg-text">
+        <span class="work-status-text {{ _work_status }}">{{ _status_label }}</span>
+        {% if _step_count > 0 %}
+          <span class="muted" style="font-size:11px; margin-left:6px;">{{ _step_count }} step{{ 's' if _step_count != 1 }}</span>
+        {% endif %}
       </div>
     </div>
   </div>
+  {% endif %}
 
 {# ── Tool Confirmation Request ── #}
 {% elif _parsed.get('envelope') == 'tool_confirmation_request' %}
@@ -56,7 +71,7 @@
         </span>
       </div>
       {% if _still_pending %}
-        <div style="margin-top:6px; display:flex; gap:4px;">
+        <div class="toolcall-confirm-row">
           <form method="post" action="{{ url_for('sessions.confirm_tool_call', session_id=session_id) }}" class="inline">
             <input type="hidden" name="invocation_id" value="{{ _inv_id }}">
             <button type="submit" name="decision" value="no" class="btn btn-sm btn-danger">Deny</button>
@@ -64,6 +79,8 @@
             <button type="submit" name="decision" value="yes_permanent" class="btn btn-sm btn-primary">Always allow</button>
           </form>
         </div>
+      {% else %}
+        <div class="toolcall-confirm-resolved"><span>✓ resolved</span></div>
       {% endif %}
     </div>
   </div>
@@ -74,11 +91,11 @@
   <div class="msg msg-toolcall" data-id="{{ message.routed_message_id }}" data-created-at="{{ message.created_at }}">
     <div class="msg-bubble" onclick="openToolPanel('{{ _inv_id }}')">
       <div class="toolcall-summary">
-        <span class="toolcall-icon toolcall-icon-shell">⚡</span>
+        <span class="toolcall-icon toolcall-icon-{{ _parsed.get('tool_harness_type', 'shell') }}">⚡</span>
         <span class="toolcall-name">{{ _parsed.get('tool_name', '?') }}</span>
         <span class="toolcall-status">
           <span class="toolcall-status-dot {{ _parsed.get('status', 'completed') }}"></span>
-          <span class="badge badge-{{ _parsed.get('status', 'completed') }}" style="font-size:10px; margin-left:4px;">{{ _parsed.get('status', '?') }}</span>
+          <span class="badge badge-{{ _parsed.get('status', 'completed') }} toolcall-result-badge">{{ _parsed.get('status', '?') }}</span>
         </span>
       </div>
     </div>

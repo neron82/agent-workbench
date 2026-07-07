@@ -295,3 +295,56 @@ def test_can_create_agent_via_settings_and_chat_with_mock_provider(client):
     payload = incremental.get_json()
     assert "lokale Mock-Antwort" in payload["html"]
     assert payload["next_after"] > 0
+
+
+def test_session_config_page_shows_auto_turns_ui(client):
+    """The session config page must render the auto-turns form."""
+    workspace_id = _boot_workspace(client)
+    _, session_id = _create_channel_with_session(client, workspace_id)
+
+    response = client.get(f"/sessions/{session_id}/config")
+    assert response.status_code == 200
+    body = response.data.decode("utf-8")
+    assert "Auto Turns" in body
+    assert "max_auto_turns" in body
+    assert "max_tool_iterations" in body or "Tool Call Limit" in body
+
+
+def test_session_config_update_max_auto_turns_via_ui(client):
+    """POST to /sessions/<id>/max-auto-turns must persist the value."""
+    workspace_id = _boot_workspace(client)
+    _, session_id = _create_channel_with_session(client, workspace_id)
+
+    response = client.post(
+        f"/sessions/{session_id}/max-auto-turns",
+        data={"max_auto_turns": "7"},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    body = response.data.decode("utf-8")
+    assert "Auto-turn limit updated to 7" in body or "Auto Turns" in body
+
+    # Verify the value persisted
+    conn = get_connection(client.application.config["WORKBENCH_DB_PATH"])
+    try:
+        row = conn.execute(
+            "SELECT max_auto_turns FROM session_extensions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        assert row is not None
+        assert row["max_auto_turns"] == 7
+    finally:
+        conn.close()
+
+
+def test_session_view_header_shows_auto_turns_inline_form(client):
+    """The session view header must render the inline turns form."""
+    workspace_id = _boot_workspace(client)
+    _, session_id = _create_channel_with_session(client, workspace_id)
+
+    response = client.get(f"/sessions/{session_id}")
+    assert response.status_code == 200
+    body = response.data.decode("utf-8")
+    assert "max_auto_turns" in body
+    # The inline number input should be present
+    assert 'name="max_auto_turns"' in body

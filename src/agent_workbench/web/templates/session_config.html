@@ -31,6 +31,19 @@
     </form>
   </div>
 
+  {# ── Auto Turns (iterative agent discussion) ── #}
+  <div class="card" style="margin-bottom: 12px;">
+    <h3>Auto Turns (Agent Discussion)</h3>
+    <p class="muted" style="margin-bottom: 8px;">
+      When an agent <code>@mentions</code> another agent, continue the chain automatically.
+      <code>0</code> = off (current behaviour). Default: chat=0, research=3, work=5.
+    </p>
+    <form method="post" action="{{ url_for('sessions.update_max_auto_turns', session_id=session.session_id) }}" style="display:flex; gap:8px; align-items:center;">
+      <input type="number" name="max_auto_turns" value="{{ session.max_auto_turns or 0 }}" min="0" max="50" style="width:100px;">
+      <button type="submit" class="btn btn-primary btn-sm">Save</button>
+    </form>
+  </div>
+
   {# ── Info ── #}
   <div class="card" style="margin-bottom: 12px;">
     <h3>Info</h3>

@@ -31,6 +31,7 @@ class SessionExtension:
     status: str
     title: Optional[str]
     max_tool_iterations: Optional[int]
+    max_auto_turns: Optional[int]  # 0 = off, >0 = iterative agent turns
     created_at: float
 
 
@@ -59,6 +60,7 @@ class SessionExtensionRepository:
         status: str = "active",
         title: Optional[str] = None,
         max_tool_iterations: Optional[int] = None,
+        max_auto_turns: Optional[int] = None,
     ) -> SessionExtension:
         """Insert a new session extension and return the persisted instance."""
         if session_type not in SESSION_TYPES:
@@ -76,8 +78,8 @@ class SessionExtensionRepository:
         self.conn.execute(
             "INSERT INTO session_extensions "
             "(session_id, workspace_id, session_type, agent_profile_binding_id, "
-            "fork_id, task_spec_id, status, title, max_tool_iterations, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "fork_id, task_spec_id, status, title, max_tool_iterations, max_auto_turns, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 session_id,
                 workspace_id,
@@ -88,6 +90,7 @@ class SessionExtensionRepository:
                 status,
                 title,
                 max_tool_iterations,
+                max_auto_turns,
                 created_at,
             ),
         )
@@ -102,6 +105,7 @@ class SessionExtensionRepository:
             status=status,
             title=title,
             max_tool_iterations=max_tool_iterations,
+            max_auto_turns=max_auto_turns,
             created_at=created_at,
         )
 
@@ -109,7 +113,7 @@ class SessionExtensionRepository:
         row = self.conn.execute(
             "SELECT session_id, workspace_id, session_type, "
             "agent_profile_binding_id, fork_id, task_spec_id, status, title, "
-            "max_tool_iterations, created_at "
+            "max_tool_iterations, max_auto_turns, created_at "
             "FROM session_extensions WHERE session_id = ?",
             (session_id,),
         ).fetchone()
@@ -125,7 +129,7 @@ class SessionExtensionRepository:
         rows = self.conn.execute(
             "SELECT session_id, workspace_id, session_type, "
             "agent_profile_binding_id, fork_id, task_spec_id, status, title, "
-            "max_tool_iterations, created_at "
+            "max_tool_iterations, max_auto_turns, created_at "
             "FROM session_extensions WHERE workspace_id = ? ORDER BY created_at DESC",
             (workspace_id,),
         ).fetchall()
@@ -205,6 +209,22 @@ class SessionExtensionRepository:
             return None
         return self.get_by_id(session_id)
 
+    def update_max_auto_turns(
+        self,
+        session_id: str,
+        *,
+        max_auto_turns: int,
+    ) -> Optional[SessionExtension]:
+        """Update the max_auto_turns of a session extension."""
+        cursor = self.conn.execute(
+            "UPDATE session_extensions SET max_auto_turns = ? WHERE session_id = ?",
+            (max_auto_turns, session_id),
+        )
+        self.conn.commit()
+        if cursor.rowcount == 0:
+            return None
+        return self.get_by_id(session_id)
+
     def delete(self, session_id: str) -> bool:
         """Delete a session extension. Returns True if a row was removed."""
         cursor = self.conn.execute(
@@ -230,5 +250,6 @@ class SessionExtensionRepository:
             status=row["status"],
             title=row["title"],
             max_tool_iterations=row["max_tool_iterations"],
+            max_auto_turns=row["max_auto_turns"],
             created_at=row["created_at"],
         )

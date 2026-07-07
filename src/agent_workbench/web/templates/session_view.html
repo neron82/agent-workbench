@@ -19,6 +19,11 @@
         </form>
       </div>
       <div style="display:flex; gap:4px;">
+        <form method="post" action="{{ url_for('sessions.update_max_auto_turns', session_id=session.session_id) }}" class="inline" style="display:flex; align-items:center; gap:4px;">
+          <label style="font-size:11px; color:var(--ink-muted); white-space:nowrap;">Turns</label>
+          <input type="number" name="max_auto_turns" value="{{ session.max_auto_turns or 0 }}" min="0" max="50" style="width:40px; font-size:11px; padding:2px 4px; text-align:center;">
+          <button type="submit" class="btn btn-sm" style="font-size:10px; padding:2px 6px;">↻</button>
+        </form>
         <form method="post" action="{{ url_for('sessions.update_status', session_id=session.session_id) }}" class="inline">
           <select name="status" onchange="this.form.submit()" style="font-size:12px; padding:4px 8px;">
             {% for s in session_statuses %}
@@ -111,7 +116,7 @@
     </div>
     <div class="panel-body" id="toolcall-body">
       <div class="empty-state" style="padding:20px 0;">
-        <p class="muted">Click a tool call or work step to see details.</p>
+        <p class="muted">Click a work bubble to see details.</p>
       </div>
     </div>
   </div>
@@ -174,37 +179,49 @@ function openToolPanel(invocationId) {
     });
 }
 
-function openWorkPanel(invocationId, toolName, toolArgs, toolResult, status) {
+function openWorkPanelFromBubble(element) {
   var panel = document.getElementById('toolcall-panel');
   var body = document.getElementById('toolcall-body');
   var title = document.getElementById('toolcall-panel-title');
+
+  var agentName = element.getAttribute('data-work-agent') || 'Agent';
+  var stepsJson = element.getAttribute('data-work-steps') || '[]';
+  var steps = [];
+  try { steps = JSON.parse(stepsJson); } catch(e) { steps = []; }
+
   panel.classList.add('open');
-  title.textContent = 'Work Step: ' + escapeHtml(toolName);
+  title.textContent = agentName + ' — Work Steps (' + steps.length + ')';
 
-  var html = '<div class="detail-section">';
-  html += '<h4>Tool</h4>';
-  html += '<div class="kv-row"><span class="k">Name</span><span>' + escapeHtml(toolName) + '</span></div>';
-  html += '<div class="kv-row"><span class="k">Status</span><span class="badge badge-' + status + '">' + status + '</span></div>';
-  html += '</div>';
+  var html = '';
+  for (var i = 0; i < steps.length; i++) {
+    var s = steps[i];
+    html += '<div class="detail-section" style="border-bottom:1px solid var(--border); padding-bottom:8px; margin-bottom:8px;">';
+    html += '<h4>#' + s.iteration + ' — ' + escapeHtml(s.tool_name || '?') + '</h4>';
+    html += '<div class="kv-row"><span class="k">Status</span><span class="badge badge-' + (s.status || 'completed') + '">' + (s.status || '?') + '</span></div>';
 
-  if (toolArgs && Object.keys(toolArgs).length) {
-    html += '<div class="detail-section">';
-    html += '<h4>Arguments</h4>';
-    html += '<pre>' + escapeHtml(JSON.stringify(toolArgs, null, 2)) + '</pre>';
+    if (s.tool_arguments && Object.keys(s.tool_arguments).length) {
+      html += '<h5 style="margin:6px 0 2px; font-size:11px; color:var(--ink-muted);">Arguments</h5>';
+      html += '<pre style="font-size:11px; max-height:120px; overflow-y:auto;">' + escapeHtml(JSON.stringify(s.tool_arguments, null, 2)) + '</pre>';
+    }
+
+    if (s.tool_result) {
+      var resultPreview = s.tool_result;
+      if (resultPreview.length > 2000) {
+        resultPreview = resultPreview.substring(0, 2000) + '\n… [truncated]';
+      }
+      html += '<h5 style="margin:6px 0 2px; font-size:11px; color:var(--ink-muted);">Result</h5>';
+      html += '<pre style="font-size:11px; max-height:200px; overflow-y:auto;">' + escapeHtml(resultPreview) + '</pre>';
+    }
+
+    if (s.invocation_id) {
+      html += '<div style="margin-top:4px;"><a href="/invocations/' + s.invocation_id + '/detail" class="btn btn-sm" style="font-size:10px;">View full →</a></div>';
+    }
+
     html += '</div>';
   }
 
-  if (toolResult) {
-    html += '<div class="detail-section">';
-    html += '<h4>Result</h4>';
-    html += '<pre>' + escapeHtml(toolResult) + '</pre>';
-    html += '</div>';
-  }
-
-  if (invocationId) {
-    html += '<div class="detail-section">';
-    html += '<a href="/invocations/' + invocationId + '/detail" class="btn btn-sm">View full invocation →</a>';
-    html += '</div>';
+  if (steps.length === 0) {
+    html = '<div class="empty-state"><p class="muted">No work steps recorded.</p></div>';
   }
 
   body.innerHTML = html;
@@ -257,7 +274,6 @@ function pollAgentStatus() {
         if (done.length > 0) {
           detail.textContent = 'Done.';
           stopBtn.style.display = 'none';
-          // Stop polling after a short delay
           if (pollTimer) {
             clearInterval(pollTimer);
             pollTimer = null;

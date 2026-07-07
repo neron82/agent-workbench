@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import urllib.error
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from agent_workbench.db import apply_migrations, get_connection
 from agent_workbench.models.agent_profile import AgentProfileRepository
@@ -64,12 +65,24 @@ class AgentRuntimeService:
         self.tool_registry = ToolRegistry(ToolRepository(conn))
         self.tool_dispatcher = ToolDispatcher(conn)
 
+    def _parse_agent_mention(self, text: str) -> Optional[str]:
+        """Extract an @agent_name from text, if present.
+
+        Looks for ``@word`` at the start or after whitespace.
+        Returns the agent name (without ``@``) or ``None``.
+        """
+        m = re.search(r"(?:^|\s)@(\w[\w-]*)", text)
+        if m:
+            return m.group(1)
+        return None
+
     def generate_for_session(
         self,
         *,
         session_id: str,
         user_body: str,
         user_id: str,
+        target_agent_name: Optional[str] = None,
     ) -> None:
         session = self.sessions.get_by_id(session_id)
         if session is None:
@@ -79,6 +92,34 @@ class AgentRuntimeService:
             raise AgentRuntimeError(f"No channel linked to session {session_id!r}")
 
         details = self.participants.list_active_participant_details(session_id)
+
+        # Filter to a specific agent if @agent_name was used
+        if target_agent_name:
+            filtered = [
+                d for d in details
+                if d["agent_name"].lower() == target_agent_name.lower()
+            ]
+            if not filtered:
+                error_msg = f"Agent {target_agent_name!r} not found in this session"
+                payload = json.dumps({
+                    "envelope": "agent_error",
+                    "body": error_msg,
+                    "from": "system",
+                })
+                self.routing.route_message(
+                    workspace_id=session.workspace_id,
+                    channel_id=channel["channel_id"],
+                    source_type="system",
+                    source_id="agent-runtime",
+                    target_type="all",
+                    target_id="@all",
+                    message_kind="system",
+                    session_id=session_id,
+                    payload_ref=payload,
+                )
+                return
+            details = filtered
+
         history = self._build_history(session_id)
         session_type = session.session_type or "chat"
         session_policy = DEFAULT_SESSION_POLICIES.get(
@@ -136,16 +177,105 @@ class AgentRuntimeService:
                     payload_ref=payload,
                 )
 
+        # ── Iterative auto-turn chain ────────────────────────────────
+        # If max_auto_turns > 0, check if any agent's reply contains
+        # an @mention of another agent. If so, dispatch only that agent
+        # and repeat until max_auto_turns is reached or no @mentions.
+        max_auto_turns = getattr(session, "max_auto_turns", None) or 0
+        if max_auto_turns > 0 and not target_agent_name:
+            auto_turns_remaining = max_auto_turns
+            # Track who spoke last — starts as the last agent in the
+            # initial dispatch pass so the self-loop guard works
+            # on the first auto-turn iteration too.
+            last_agent_name = details[-1]["agent_name"] if details else None
+            while auto_turns_remaining > 0:
+                # Check the last reply for an @mention
+                last_reply = history[-1]["content"] if history else ""
+                next_target = self._parse_agent_mention(last_reply)
+                if not next_target:
+                    break  # No @mention — chain ends
+
+                # Don't let an agent talk to itself
+                if last_agent_name and next_target.lower() == last_agent_name.lower():
+                    break
+
+                # Find the target detail
+                target_details = [
+                    d for d in self.participants.list_active_participant_details(session_id)
+                    if d["agent_name"].lower() == next_target.lower()
+                ]
+                if not target_details:
+                    break  # Target not found
+
+                auto_turns_remaining -= 1
+                target_detail = target_details[0]
+                last_agent_name = target_detail["agent_name"]
+
+                try:
+                    reply = self._generate_reply(
+                        target_detail,
+                        user_body="",
+                        history=history,
+                        session=session,
+                        session_policy=session_policy,
+                        channel=channel,
+                    )
+                    payload = json.dumps(
+                        {
+                            "envelope": "agent_reply",
+                            "body": reply,
+                            "from": target_detail["agent_name"],
+                            "binding_id": target_detail["binding_id"],
+                            "agent_profile_id": target_detail["agent_profile_id"],
+                        }
+                    )
+                    self.routing.route_message(
+                        workspace_id=session.workspace_id,
+                        channel_id=channel["channel_id"],
+                        source_type="agent",
+                        source_id=target_detail["agent_name"],
+                        target_type="all",
+                        target_id="@all",
+                        message_kind="conversation",
+                        session_id=session_id,
+                        payload_ref=payload,
+                    )
+                    history.append({"role": "assistant", "content": reply})
+                except Exception as exc:
+                    payload = json.dumps(
+                        {
+                            "envelope": "agent_error",
+                            "body": f"{target_detail['agent_name']} konnte nicht antworten: {exc}",
+                            "from": "system",
+                        }
+                    )
+                    self.routing.route_message(
+                        workspace_id=session.workspace_id,
+                        channel_id=channel["channel_id"],
+                        source_type="system",
+                        source_id="agent-runtime",
+                        target_type="all",
+                        target_id="@all",
+                        message_kind="system",
+                        session_id=session_id,
+                        payload_ref=payload,
+                    )
+                    break
+
     def _build_history(self, session_id: str, limit: int = 12) -> List[Dict[str, str]]:
         rows = self.messages.list_by_session(session_id)
-        visible = [m for m in rows if m.message_kind != "dispatch"][-limit:]
+        visible = [m for m in rows if m.message_kind not in ("dispatch", "agent_work")][-limit:]
         history: List[Dict[str, str]] = []
         for msg in visible:
             body = extract_message_body(msg.payload_ref)
             if not body:
                 continue
             role = "assistant" if msg.source_type in ("agent", "orchestrator", "worker") else "user"
-            history.append({"role": role, "content": body})
+            entry: Dict[str, str] = {"role": role, "content": body}
+            # Include the agent name so the LLM can distinguish who said what
+            if role == "assistant" and msg.source_id:
+                entry["name"] = msg.source_id
+            history.append(entry)
         return history
 
     def _generate_reply(
@@ -177,6 +307,25 @@ class AgentRuntimeService:
         if detail.get("perspective_ref"):
             system_prompt += f" Perspective: {detail['perspective_ref']}."
         system_prompt += f" Agent name: {detail['agent_name']}."
+
+        # List other participants so the agent can @mention them
+        # (re-fetch from DB to get all active participants, not just the target)
+        all_participants = self.participants.list_active_participant_details(
+            session.session_id
+        )
+        other_names = [
+            p["agent_name"]
+            for p in all_participants
+            if p["agent_name"] != detail["agent_name"]
+        ]
+        if other_names:
+            system_prompt += (
+                " Other participants in this session: "
+                + ", ".join(f"@{n}" for n in other_names)
+                + ". "
+                "You can ask them for help by writing @their_name in your reply. "
+                "They will see your message and can respond automatically."
+            )
 
         if provider.provider_kind == "mock":
             return self._mock_reply(detail, user_body=user_body, history=history)
@@ -279,6 +428,7 @@ class AgentRuntimeService:
         tracker.start_agent(session.session_id, agent_name)
         iterations = 0
         final_text = ""
+        work_steps: List[Dict[str, Any]] = []
         try:
             while iterations < max_iter:
                 if tracker.should_stop(session.session_id, agent_name):
@@ -324,30 +474,15 @@ class AgentRuntimeService:
                         result=result.content,
                         failed=(result.status != "completed"),
                     )
-                    # Persist work step as a routed_message so it survives
-                    # in chat history as a "work done" bubble.
-                    if channel:
-                        work_payload = json.dumps({
-                            "envelope": "agent_work",
-                            "agent_name": agent_name,
-                            "iteration": iterations,
-                            "tool_name": tc_name,
-                            "tool_arguments": tc_args,
-                            "tool_result": result.content,
-                            "status": result.status,
-                            "invocation_id": result.invocation_id,
-                        })
-                        self.routing.route_message(
-                            workspace_id=session.workspace_id,
-                            channel_id=channel["channel_id"],
-                            source_type="agent",
-                            source_id=agent_name,
-                            target_type="all",
-                            target_id="@all",
-                            message_kind="agent_work",
-                            session_id=session.session_id,
-                            payload_ref=work_payload,
-                        )
+                    # Collect work steps for batch posting after agent is done
+                    work_steps.append({
+                        "iteration": iterations,
+                        "tool_name": tc_name,
+                        "tool_arguments": tc_args,
+                        "tool_result": result.content,
+                        "status": result.status,
+                        "invocation_id": result.invocation_id,
+                    })
                     if result.status == "pending_confirmation":
                         if channel is not None:
                             self._post_confirmation_request(
@@ -380,6 +515,25 @@ class AgentRuntimeService:
                 final_text = (
                     f"[agent stopped after {iterations} tool iteration(s) "
                     f"without producing a final reply]"
+                )
+            # Batch-post collected work steps as a single agent_work message
+            if work_steps and channel:
+                work_payload = json.dumps({
+                    "envelope": "agent_work",
+                    "agent_name": agent_name,
+                    "steps": work_steps,
+                    "status": "completed" if not final_text.startswith("[agent stopped") else "stopped",
+                })
+                self.routing.route_message(
+                    workspace_id=session.workspace_id,
+                    channel_id=channel["channel_id"],
+                    source_type="agent",
+                    source_id=agent_name,
+                    target_type="all",
+                    target_id="@all",
+                    message_kind="agent_work",
+                    session_id=session.session_id,
+                    payload_ref=work_payload,
                 )
             tracker.complete_agent(session.session_id, agent_name)
         return final_text
@@ -446,6 +600,7 @@ def launch_agent_responses_async(
     session_id: str,
     user_body: str,
     user_id: str,
+    target_agent_name: Optional[str] = None,
 ) -> None:
     thread = threading.Thread(
         target=run_agent_responses,
@@ -454,6 +609,7 @@ def launch_agent_responses_async(
             "session_id": session_id,
             "user_body": user_body,
             "user_id": user_id,
+            "target_agent_name": target_agent_name,
         },
         daemon=True,
         name=f"agent-workbench-session-{session_id[:8]}",
@@ -467,6 +623,7 @@ def run_agent_responses(
     session_id: str,
     user_body: str,
     user_id: str,
+    target_agent_name: Optional[str] = None,
 ) -> None:
     conn = get_connection(db_path)
     try:
@@ -475,6 +632,7 @@ def run_agent_responses(
             session_id=session_id,
             user_body=user_body,
             user_id=user_id,
+            target_agent_name=target_agent_name,
         )
     finally:
         conn.close()

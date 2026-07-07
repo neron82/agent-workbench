@@ -38,6 +38,13 @@ DEFAULT_MAX_TOOL_ITERATIONS: dict[str, int] = {
     "work": 25,
 }
 
+# ── Default max_auto_turns by session type ──────────────────────────────
+DEFAULT_MAX_AUTO_TURNS: dict[str, int] = {
+    "chat": 0,      # off — simple broadcast
+    "research": 3,  # allow a few back-and-forth turns
+    "work": 5,      # longer chains for structured work
+}
+
 
 class SessionService:
     """High-level session lifecycle service."""
@@ -60,20 +67,26 @@ class SessionService:
         channel_id: Optional[str] = None,
         title: Optional[str] = None,
         max_tool_iterations: Optional[int] = None,
+        max_auto_turns: Optional[int] = None,
     ) -> SessionExtension:
         """Create a new session and (optionally) link it as the channel's
         active session.
 
         If ``max_tool_iterations`` is not provided, the default for the
         session type is applied (chat=5, research=10, work=25).
+        If ``max_auto_turns`` is not provided, the default for the
+        session type is applied (chat=0, research=3, work=5).
         """
         if max_tool_iterations is None:
             max_tool_iterations = DEFAULT_MAX_TOOL_ITERATIONS.get(session_type, 5)
+        if max_auto_turns is None:
+            max_auto_turns = DEFAULT_MAX_AUTO_TURNS.get(session_type, 0)
         session = self.sessions.create(
             workspace_id=workspace_id,
             session_type=session_type,
             title=title,
             max_tool_iterations=max_tool_iterations,
+            max_auto_turns=max_auto_turns,
         )
 
         if channel_id is not None:
@@ -140,8 +153,28 @@ class SessionService:
             raise SessionNotFoundError(f"Session not found: {session_id!r}")
         return updated
 
+    def update_session_max_auto_turns(
+        self, session_id: str, max_auto_turns: int
+    ) -> SessionExtension:
+        """Update the max_auto_turns of a session."""
+        if max_auto_turns < 0:
+            raise ValueError("max_auto_turns must be >= 0")
+        updated = self.sessions.update_max_auto_turns(
+            session_id, max_auto_turns=max_auto_turns
+        )
+        if updated is None:
+            raise SessionNotFoundError(f"Session not found: {session_id!r}")
+        return updated
+
     def delete_session(self, session_id: str) -> None:
-        """Delete a session and all associated data (cascade)."""
+        """Delete a session and all associated data (cascade).
+
+        Order is critical: child rows must be deleted before parent rows
+        to satisfy FK constraints.  Row-based deletes for tables that
+        reference the session directly, plus intermediate cleanup for
+        tables that reference indirect children (e.g. harness_events
+        references harness_runs).
+        """
         session = self.get_session(session_id)
         ws_id = session.workspace_id
 
@@ -152,24 +185,55 @@ class SessionService:
             (session_id,),
         )
 
-        # 2. Soft-delete participants
-        self.conn.execute(
-            "UPDATE session_participants SET removed_at = ? "
-            "WHERE session_id = ? AND removed_at IS NULL",
-            (time.time(), session_id),
-        )
+        # 2. Collect child IDs we need for intermediate FK cleanup
+        hrun_ids = [
+            r["harness_run_id"]
+            for r in self.conn.execute(
+                "SELECT harness_run_id FROM harness_runs WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        ]
+        fk_ids = [
+            r["fork_id"]
+            for r in self.conn.execute(
+                "SELECT fork_id FROM fork_records WHERE parent_session_id = ? OR child_session_id = ?",
+                (session_id, session_id),
+            ).fetchall()
+        ]
+        binding_ids = [
+            r["binding_id"]
+            for r in self.conn.execute(
+                "SELECT binding_id FROM agent_profile_bindings WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        ]
 
-        # 3. Delete bindings
-        self.conn.execute(
-            "DELETE FROM agent_profile_bindings WHERE session_id = ?",
-            (session_id,),
-        )
+        # 3. Delete harness_children (NOT NULL FKs to harness_runs)
+        for hrid in hrun_ids:
+            self.conn.execute(
+                "DELETE FROM harness_events WHERE harness_run_id = ?", (hrid,)
+            )
+            self.conn.execute(
+                "DELETE FROM harness_transcripts WHERE harness_run_id = ?", (hrid,)
+            )
+            self.conn.execute(
+                "DELETE FROM permission_requests WHERE harness_run_id = ?", (hrid,)
+            )
 
-        # 4. Delete tool invocations
-        self.conn.execute(
-            "DELETE FROM tool_invocations WHERE session_id = ?",
-            (session_id,),
-        )
+        # 4. NULL optional FKs (event_records, artifacts)
+        for hrid in hrun_ids:
+            self.conn.execute(
+                "UPDATE event_records SET harness_run_id = NULL WHERE harness_run_id = ?",
+                (hrid,),
+            )
+            self.conn.execute(
+                "UPDATE artifacts SET producer_harness_run_id = NULL WHERE producer_harness_run_id = ?",
+                (hrid,),
+            )
+            self.conn.execute(
+                "UPDATE replay_records SET source_harness_run_id = NULL WHERE source_harness_run_id = ?",
+                (hrid,),
+            )
 
         # 5. Delete harness runs
         self.conn.execute(
@@ -177,19 +241,60 @@ class SessionService:
             (session_id,),
         )
 
-        # 6. Delete routed messages
-        self.conn.execute(
-            "DELETE FROM routed_messages WHERE session_id = ?",
-            (session_id,),
-        )
+        # 6. Delete replay_records (NOT NULL FK to fork_records)
+        for fid in fk_ids:
+            self.conn.execute(
+                "DELETE FROM replay_records WHERE fork_id = ?", (fid,)
+            )
 
-        # 7. Delete fork records referencing this session
+        # 7. NULL fork_id on child sessions
+        for fid in fk_ids:
+            self.conn.execute(
+                "UPDATE session_extensions SET fork_id = NULL WHERE fork_id = ?", (fid,)
+            )
+
+        # 8. Delete fork records
         self.conn.execute(
             "DELETE FROM fork_records WHERE parent_session_id = ? OR child_session_id = ?",
             (session_id, session_id),
         )
 
-        # 8. Delete the session itself
+        # 9. Delete tool invocations
+        self.conn.execute(
+            "DELETE FROM tool_invocations WHERE session_id = ?",
+            (session_id,),
+        )
+
+        # 10. NULL review_records FK (optional FK to bindings)
+        for bid in binding_ids:
+            self.conn.execute(
+                "UPDATE review_records SET reviewer_binding_id = NULL WHERE reviewer_binding_id = ?",
+                (bid,),
+            )
+
+        # 11. NULL session_extensions FK to bindings
+        self.conn.execute(
+            "UPDATE session_extensions SET agent_profile_binding_id = NULL WHERE session_id = ?",
+            (session_id,),
+        )
+
+        # 12. Delete bindings (hard-delete participants first — NOT NULL FK)
+        self.conn.execute(
+            "DELETE FROM session_participants WHERE session_id = ?",
+            (session_id,),
+        )
+        self.conn.execute(
+            "DELETE FROM agent_profile_bindings WHERE session_id = ?",
+            (session_id,),
+        )
+
+        # 13. Delete routed messages
+        self.conn.execute(
+            "DELETE FROM routed_messages WHERE session_id = ?",
+            (session_id,),
+        )
+
+        # 14. Delete the session itself
         self.sessions.delete(session_id)
         self.conn.commit()
 
