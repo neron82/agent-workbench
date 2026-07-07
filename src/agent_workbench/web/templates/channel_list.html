@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Channels — Agent Workbench{% endblock %}
+
+{% block content %}
+<h1>Channels</h1>
+
+{% if not workspace_id %}
+  <div class="panel">
+    <p>No workspace found. Create one to get started.</p>
+  </div>
+{% else %}
+  <p class="muted">
+    Workspace <code>{{ workspace_id[:8] }}</code> &middot;
+    {{ channels_by_kind['chat']|length + channels_by_kind['research']|length + channels_by_kind['work']|length }} channel(s)
+  </p>
+
+  {% for kind in ['chat', 'research', 'work'] %}
+    <section class="group">
+      <h2>
+        <span class="pill kind-{{ kind }}">{{ kind }}</span>
+        {{ channels_by_kind[kind]|length }} channel{{ '' if channels_by_kind[kind]|length == 1 else 's' }}
+      </h2>
+      <ul class="channel-list">
+        {% for ch in channels_by_kind[kind] %}
+          <li>
+            <span class="pill kind-{{ ch.channel_kind }}">{{ ch.channel_kind }}</span>
+            <a class="title" href="{{ url_for('channels.show_channel', channel_id=ch.channel_id) }}">
+              {{ ch.title or '(untitled)' }}
+            </a>
+            <span class="pill status-{{ ch.status }}">{{ ch.status }}</span>
+            {% set active = active_sessions.get(ch.channel_id) %}
+            {% if active %}
+              <a class="muted" href="{{ url_for('sessions.show_session', session_id=active.session_id) }}">
+                session: {{ active.session_type }} / {{ active.status }}
+              </a>
+            {% else %}
+              <span class="muted">no active session</span>
+            {% endif %}
+            <form method="post" action="{{ url_for('channels.fork_channel', channel_id=ch.channel_id) }}" class="inline">
+              <input type="hidden" name="new_session_type" value="research">
+              <button type="submit" class="secondary">Fork</button>
+            </form>
+          </li>
+        {% else %}
+          <li class="empty">No {{ kind }} channels yet.</li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endfor %}
+
+  <section class="panel">
+    <h2>Create a new channel</h2>
+    <form method="post" action="{{ url_for('channels.create_channel') }}">
+      <input type="hidden" name="workspace_id" value="{{ workspace_id }}">
+      <div class="form-row">
+        <label for="channel_kind">Kind</label>
+        <select id="channel_kind" name="channel_kind">
+          {% for k in channel_kinds %}
+            <option value="{{ k }}" {% if k == 'chat' %}selected{% endif %}>{{ k }}</option>
+          {% endfor %}
+        </select>
+        <label for="title">Title</label>
+        <input id="title" type="text" name="title" placeholder="e.g. general" required>
+        <label>
+          <input type="checkbox" name="create_session" value="1" checked>
+          spawn initial session
+        </label>
+        <button type="submit">Create</button>
+      </div>
+    </form>
+  </section>
+
+  {% if workspaces and workspaces|length > 1 %}
+    <section class="panel">
+      <h3>Switch workspace</h3>
+      <form method="get" action="{{ url_for('channels.list_channels') }}" class="form-row">
+        <label for="workspace_id">Workspace</label>
+        <select id="workspace_id" name="workspace_id">
+          {% for ws in workspaces %}
+            <option value="{{ ws.workspace_id }}" {% if ws.workspace_id == workspace_id %}selected{% endif %}>
+              {{ ws.name }} ({{ ws.workspace_id[:8] }})
+            </option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="secondary">Switch</button>
+      </form>
+    </section>
+  {% endif %}
+{% endif %}
+{% endblock %}

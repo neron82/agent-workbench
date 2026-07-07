@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Fork channel {{ channel.title or channel.channel_id[:8] }}{% endblock %}
+
+{% block content %}
+<p>
+  <a href="{{ url_for('channels.show_channel', channel_id=channel.channel_id) }}">&larr; Channel {{ channel.title or channel.channel_id[:8] }}</a>
+</p>
+
+<h1>Fork channel</h1>
+
+<div class="panel">
+  <p class="muted">
+    Forks create a new child session of the chosen type. The current active
+    session on this channel (if any) is the parent. Type changes always go
+    through a structured fork record; the child session is then linked back
+    as the new active session.
+  </p>
+  <form method="post" action="{{ url_for('channels.fork_channel', channel_id=channel.channel_id) }}">
+    <div class="form-row">
+      <label for="new_session_type">New session type</label>
+      <select id="new_session_type" name="new_session_type">
+        {% for st in session_types %}
+          <option value="{{ st }}" {% if st == 'research' %}selected{% endif %}>{{ st }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="fork_reason">Reason</label>
+      <input id="fork_reason" type="text" name="fork_reason" value="User-initiated fork from web UI" style="flex:1; min-width:280px;">
+    </div>
+    <div class="form-row">
+      <label for="initiated_by">Initiated by</label>
+      <select id="initiated_by" name="initiated_by">
+        <option value="user" selected>user</option>
+        <option value="orchestrator">orchestrator</option>
+        <option value="system">system</option>
+      </select>
+    </div>
+    <button type="submit">Create fork</button>
+  </form>
+</div>
+{% endblock %}

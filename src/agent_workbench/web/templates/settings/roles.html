@@ -1,0 +1,48 @@
+{% extends "settings/base.html" %}
+
+{% block title %}Settings — Rollen{% endblock %}
+
+{% block settings_content %}
+<div class="panel">
+  <h2>Neue Rolle anlegen</h2>
+  <form method="post" action="{{ url_for('settings.create_role') }}">
+    <div class="form-row">
+      <label>Name</label>
+      <input type="text" name="name" required>
+      <label>Beschreibung</label>
+      <input type="text" name="description" style="min-width: 320px; flex: 1;">
+    </div>
+    <div class="form-row">
+      <label>System Prompt</label>
+      <textarea name="system_prompt" rows="4" style="flex: 1; min-width: 320px;"></textarea>
+    </div>
+    <button type="submit">Rolle anlegen</button>
+  </form>
+</div>
+
+{% for role in roles %}
+  <div class="panel">
+    <h2>{{ role.name }} {% if role.is_builtin %}<span class="pill">builtin</span>{% endif %}</h2>
+    <form method="post" action="{{ url_for('settings.update_role', role_id=role.role_id) }}">
+      <div class="form-row">
+        <label>Name</label>
+        <input type="text" name="name" value="{{ role.name }}" required>
+        <label>Beschreibung</label>
+        <input type="text" name="description" value="{{ role.description }}" style="min-width: 320px; flex: 1;">
+      </div>
+      <div class="form-row">
+        <label>System Prompt</label>
+        <textarea name="system_prompt" rows="4" style="flex: 1; min-width: 320px;">{{ role.system_prompt }}</textarea>
+      </div>
+      <button type="submit">Speichern</button>
+    </form>
+    {% if not role.is_builtin %}
+      <form method="post" action="{{ url_for('settings.delete_role', role_id=role.role_id) }}">
+        <button type="submit" class="secondary">Rolle löschen</button>
+      </form>
+    {% else %}
+      <p class="muted">Builtin-Rollen bleiben absichtlich stehen.</p>
+    {% endif %}
+  </div>
+{% endfor %}
+{% endblock %}

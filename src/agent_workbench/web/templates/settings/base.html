@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Settings — Agent Workbench{% endblock %}
+
+{% block content %}
+<div class="settings-layout">
+  <div class="settings-sidebar">
+    <a href="{{ url_for('settings.providers_page') }}" class="{% if request.endpoint == 'settings.providers_page' %}active{% endif %}">Providers</a>
+    <a href="{{ url_for('settings.roles_page') }}" class="{% if request.endpoint == 'settings.roles_page' %}active{% endif %}">Roles</a>
+    <a href="{{ url_for('settings.agents_page') }}" class="{% if request.endpoint == 'settings.agents_page' %}active{% endif %}">Agents</a>
+    <a href="{{ url_for('settings.tools_page') }}" class="{% if request.endpoint == 'settings.tools_page' %}active{% endif %}">Tools</a>
+  </div>
+  <div class="settings-content">
+    {% block settings_content %}{% endblock %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,119 @@
+{# -------------------------------------------------------------------------
+   message_row.html — single message rendered as a chat bubble.
+
+   Supports four visual modes:
+   1. Regular messages (user/agent/system) — iMessage-style bubbles
+   2. Tool confirmation requests — compressed summary
+   3. Tool results — compressed summary with status dot
+   4. Agent work steps — compressed summary, clickable for detail panel
+   ------------------------------------------------------------------------- #}
+{% set role = bubble_role(message) %}
+{% set name = bubble_display_name(message, participants or {}) %}
+{% set initials = bubble_initials(message, participants or {}) %}
+{% set _payload = (message.payload_ref and (message.payload_ref | string)) or '' %}
+{% set _parsed = {} %}
+{% if _payload %}
+  {% set _maybe = _payload|from_json_loads %}
+  {% if _maybe is mapping %}{% set _parsed = _maybe %}{% endif %}
+{% endif %}
+
+{# ── Agent Work Step ── #}
+{% if _parsed.get('envelope') == 'agent_work' %}
+  {% set _inv_id = _parsed.get('invocation_id', '') %}
+  {% set _tool_name = _parsed.get('tool_name', '?') %}
+  {% set _step_status = _parsed.get('status', 'completed') %}
+  {% set _iteration = _parsed.get('iteration', 0) %}
+  <div class="msg msg-toolcall" data-id="{{ message.routed_message_id }}" data-created-at="{{ message.created_at }}">
+    <div class="msg-bubble" onclick="openWorkPanel('{{ _inv_id }}', '{{ _tool_name }}', {{ _parsed.get('tool_arguments', {}) | tojson }}, {{ _parsed.get('tool_result', '') | tojson }}, '{{ _step_status }}')">
+      <div class="toolcall-summary">
+        <span class="toolcall-icon toolcall-icon-{{ _parsed.get('tool_harness_type', 'shell') }}">⚡</span>
+        <span class="toolcall-name">{{ _tool_name }}</span>
+        <span class="muted" style="font-size:10px;">#{{ _iteration }}</span>
+        <span class="toolcall-status">
+          <span class="toolcall-status-dot {{ 'completed' if _step_status == 'completed' else 'failed' }}"></span>
+          <span class="badge badge-{{ _step_status }}" style="font-size:10px; margin-left:4px;">{{ _step_status }}</span>
+        </span>
+      </div>
+    </div>
+  </div>
+
+{# ── Tool Confirmation Request ── #}
+{% elif _parsed.get('envelope') == 'tool_confirmation_request' %}
+  {% set _inv_id = _parsed.get('invocation_id', '') %}
+  {% set _still_pending = _inv_id in (pending_invocation_ids or []) %}
+  <div class="msg msg-toolcall" data-id="{{ message.routed_message_id }}" data-created-at="{{ message.created_at }}">
+    <div class="msg-bubble" onclick="{% if _still_pending %}return{% else %}openToolPanel('{{ _inv_id }}'){% endif %}">
+      <div class="toolcall-summary">
+        <span class="toolcall-icon toolcall-icon-{{ _parsed.get('tool_harness_type', 'shell') }}">⚡</span>
+        <span class="toolcall-name">{{ _parsed.get('tool_name', '?') }}</span>
+        <span class="muted">needs confirmation</span>
+        <span class="toolcall-status">
+          {% if _still_pending %}
+            <span class="toolcall-status-dot running"></span>
+          {% else %}
+            <span class="toolcall-status-dot completed"></span>
+          {% endif %}
+        </span>
+      </div>
+      {% if _still_pending %}
+        <div style="margin-top:6px; display:flex; gap:4px;">
+          <form method="post" action="{{ url_for('sessions.confirm_tool_call', session_id=session_id) }}" class="inline">
+            <input type="hidden" name="invocation_id" value="{{ _inv_id }}">
+            <button type="submit" name="decision" value="no" class="btn btn-sm btn-danger">Deny</button>
+            <button type="submit" name="decision" value="yes_once" class="btn btn-sm btn-primary">Allow once</button>
+            <button type="submit" name="decision" value="yes_permanent" class="btn btn-sm btn-primary">Always allow</button>
+          </form>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+{# ── Tool Result ── #}
+{% elif _parsed.get('envelope') == 'tool_result' %}
+  {% set _inv_id = _parsed.get('invocation_id', '') %}
+  <div class="msg msg-toolcall" data-id="{{ message.routed_message_id }}" data-created-at="{{ message.created_at }}">
+    <div class="msg-bubble" onclick="openToolPanel('{{ _inv_id }}')">
+      <div class="toolcall-summary">
+        <span class="toolcall-icon toolcall-icon-shell">⚡</span>
+        <span class="toolcall-name">{{ _parsed.get('tool_name', '?') }}</span>
+        <span class="toolcall-status">
+          <span class="toolcall-status-dot {{ _parsed.get('status', 'completed') }}"></span>
+          <span class="badge badge-{{ _parsed.get('status', 'completed') }}" style="font-size:10px; margin-left:4px;">{{ _parsed.get('status', '?') }}</span>
+        </span>
+      </div>
+    </div>
+  </div>
+
+{# ── Regular Messages ── #}
+{% elif message.payload_ref %}
+  {% set body = message_body(message.payload_ref) %}
+  {% if role == 'user' %}
+    <div class="msg msg-own" data-id="{{ message.routed_message_id }}" data-created-at="{{ message.created_at }}">
+      <div class="msg-avatar msg-avatar-user">{{ initials }}</div>
+      <div class="msg-bubble">
+        <div class="msg-header">
+          <span class="msg-name">{{ name }}</span>
+          <span class="msg-time">{{ bubble_time(message.created_at) }}</span>
+        </div>
+        <div class="msg-text">{{ body }}</div>
+      </div>
+    </div>
+  {% elif role == 'system' %}
+    <div class="msg msg-system" data-id="{{ message.routed_message_id }}" data-created-at="{{ message.created_at }}">
+      <div class="msg-bubble">
+        <div class="msg-text">{{ body }}</div>
+      </div>
+    </div>
+  {% else %}
+    <div class="msg msg-other" data-id="{{ message.routed_message_id }}" data-created-at="{{ message.created_at }}">
+      <div class="msg-avatar msg-avatar-agent">{{ initials }}</div>
+      <div class="msg-bubble">
+        <div class="msg-header">
+          <span class="msg-name">{{ name }}</span>
+          <span class="msg-time">{{ bubble_time(message.created_at) }}</span>
+        </div>
+        <div class="msg-text">{{ body }}</div>
+      </div>
+    </div>
+  {% endif %}
+{% endif %}

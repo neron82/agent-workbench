@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Channel — {{ channel.title or channel.channel_kind }}{% endblock %}
+
+{% block content %}
+<p><a href="{{ url_for('channels.list_channels') }}">&larr; All channels</a></p>
+
+<h1>
+  <span class="pill kind-{{ channel.channel_kind }}">{{ channel.channel_kind }}</span>
+  {{ channel.title or '(untitled channel)' }}
+</h1>
+
+<div class="panel">
+  <div class="kv"><span class="k">channel id</span><code>{{ channel.channel_id }}</code></div>
+  <div class="kv"><span class="k">workspace</span><code>{{ channel.workspace_id[:12] }}</code></div>
+  <div class="kv"><span class="k">status</span><span class="pill status-{{ channel.status }}">{{ channel.status }}</span></div>
+  {% if channel.default_target %}
+    <div class="kv"><span class="k">default target</span><code>{{ channel.default_target }}</code></div>
+  {% endif %}
+</div>
+
+{% if active_session %}
+<div class="panel">
+  <h2>Active session</h2>
+  <div class="kv"><span class="k">type</span><span class="pill kind-{{ active_session.session_type }}">{{ active_session.session_type }}</span></div>
+  <div class="kv"><span class="k">status</span><span class="pill status-{{ active_session.status }}">{{ active_session.status }}</span></div>
+  <div class="kv"><span class="k">session id</span><code>{{ active_session.session_id[:12] }}…</code></div>
+  <p>
+    <a href="{{ url_for('sessions.show_session', session_id=active_session.session_id) }}">Open session &rarr;</a>
+  </p>
+</div>
+
+{# Kompakte Run-Liste (max 5) auf Channel-Ebene.  Volle Liste in der Session-View. #}
+{% if active_session_runs %}
+<div class="panel" data-testid="channel-runs-panel">
+  <h3>Recent runs on this session</h3>
+  <ul class="channel-list" data-testid="channel-runs-list">
+    {% for run in active_session_runs[:5] %}
+      <li data-testid="channel-run-row" data-harness="{{ run.harness_type }}">
+        <span class="pill kind-{{ run.harness_type }}">{{ run.harness_type }}</span>
+        <span class="status status-{{ run.status }}">{{ run.status }}</span>
+        <a class="title" href="{{ url_for('runs.detail', harness_run_id=run.harness_run_id) }}"><code>{{ run.harness_run_id[:12] }}…</code></a>
+      </li>
+    {% endfor %}
+  </ul>
+  <p><a href="{{ url_for('sessions.show_session', session_id=active_session.session_id) }}#runs">Alle Runs / neuen Run starten &rarr;</a></p>
+</div>
+{% endif %}
+
+  <div class="panel">
+    <h3>Participants</h3>
+    {% if participants %}
+      <ul class="channel-list">
+        {% for participant in participants %}
+          <li>
+            <span class="pill kind-{{ channel.channel_kind }}">{{ participant.role_name or 'agent' }}</span>
+            <span class="title">{{ participant.agent_name }}</span>
+            <span class="muted">model {{ participant.model_ref or 'provider default' }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">Noch keine Agenten in dieser Session.</p>
+    {% endif %}
+  </div>
+
+  {% if messages %}
+    <div class="panel">
+      <h3>Recent messages</h3>
+      {% for message in messages[-5:] %}
+        {% include "message_row.html" %}
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <div class="panel">
+    <h3>Fork this channel</h3>
+    <p class="muted">A fork creates a new child session of the chosen type and links it back into this channel.</p>
+    <form method="get" action="{{ url_for('channels.fork_channel', channel_id=channel.channel_id) }}">
+      <button type="submit">Open fork form &rarr;</button>
+    </form>
+  </div>
+{% else %}
+  <div class="panel">
+    <p>No active session on this channel.</p>
+    <form method="post" action="{{ url_for('channels.create_channel') }}">
+      <input type="hidden" name="workspace_id" value="{{ channel.workspace_id }}">
+      <input type="hidden" name="channel_kind" value="{{ channel.channel_kind }}">
+      <input type="hidden" name="title" value="{{ channel.title }}">
+      <input type="hidden" name="create_session" value="1">
+      <button type="submit" class="secondary">Spawn a chat session</button>
+    </form>
+  </div>
+{% endif %}
+{% endblock %}

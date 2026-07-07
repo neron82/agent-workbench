@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Agent Workbench{% endblock %}
+
+{% block content %}
+<div class="landing-grid">
+  <div class="start-card full-width">
+    <h2>Start a new session</h2>
+    <form method="post" action="{{ url_for('channels.create_channel') }}" id="start-form">
+      <input type="hidden" name="workspace_id" value="{{ workspace_id or '' }}">
+      <input type="hidden" name="create_session" value="1">
+      <div class="start-options" id="type-picker">
+        <div class="start-option selected" data-kind="chat" onclick="pickType('chat')">
+          <div class="option-icon">💬</div>
+          <div class="option-label">Chat</div>
+          <div class="option-desc">General conversation</div>
+        </div>
+        <div class="start-option" data-kind="research" onclick="pickType('research')">
+          <div class="option-icon">🔬</div>
+          <div class="option-label">Research</div>
+          <div class="option-desc">Deep investigation</div>
+        </div>
+        <div class="start-option" data-kind="work" onclick="pickType('work')">
+          <div class="option-icon">⚡</div>
+          <div class="option-label">Work</div>
+          <div class="option-desc">Structured execution</div>
+        </div>
+      </div>
+      <input type="hidden" name="channel_kind" id="channel-kind" value="chat">
+      <input type="hidden" name="title" id="channel-title" value="">
+      <div class="form-row">
+        <input type="text" name="title" placeholder="Session name (optional)" style="flex:1; max-width:300px;" id="session-name">
+        <button type="submit" class="btn btn-primary">Start session →</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="recent-sessions full-width">
+    <h2>Recent sessions</h2>
+    {% if recent_sessions %}
+      {% for s in recent_sessions %}
+        <a href="{{ url_for('sessions.session_config', session_id=s.session_id) }}" class="session-row" style="display:flex; text-decoration:none; color:inherit;">
+          <span class="badge badge-{{ s.session_type }}">{{ s.session_type }}</span>
+          <div class="sess-info">
+            <div class="sess-title truncate">{{ s.title or s.session_id[:12] ~ '…' }}</div>
+            <div class="sess-meta">
+              <span class="badge badge-{{ s.status }}">{{ s.status }}</span>
+              · {{ s.created_at|float|default(0)|int|datetime }}
+            </div>
+          </div>
+          <div class="sess-actions">
+            <span class="btn btn-sm" onclick="event.stopPropagation(); window.location.href='{{ url_for('sessions.show_session', session_id=s.session_id) }}'">Continue →</span>
+          </div>
+        </a>
+      {% endfor %}
+    {% else %}
+      <div class="empty-state">
+        <div class="empty-icon">🗨️</div>
+        <h3>No sessions yet</h3>
+        <p class="muted">Start a new session above to begin.</p>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+function pickType(kind) {
+  document.querySelectorAll('.start-option').forEach(el => el.classList.remove('selected'));
+  document.querySelector(`.start-option[data-kind="${kind}"]`).classList.add('selected');
+  document.getElementById('channel-kind').value = kind;
+}
+</script>
+{% endblock %}

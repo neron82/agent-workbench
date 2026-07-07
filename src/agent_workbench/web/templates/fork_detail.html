@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Fork {{ fork.fork_id[:8] }}… · Agent Workbench</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+    h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+    .subtitle { color: #666; margin-bottom: 1.5rem; font-size: 0.95rem; }
+    .card { border: 1px solid #e5e7eb; border-radius: 6px; padding: 1rem 1.25rem; margin-bottom: 1rem; background: #fafafa; }
+    .card h2 { font-size: 1.05rem; margin: 0 0 0.5rem; }
+    pre { background: #0f172a; color: #e2e8f0; padding: 0.75rem 1rem; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+    .row > div { flex: 1; min-width: 260px; }
+    .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600; }
+    .badge.chat { background: #e0e7ff; color: #3730a3; }
+    .badge.research { background: #fef3c7; color: #92400e; }
+    .badge.work { background: #d1fae5; color: #065f46; }
+    .badge.kind { background: #ede9fe; color: #5b21b6; }
+    .badge.init { background: #fee2e2; color: #991b1b; }
+    .meta { color: #666; font-size: 0.85rem; }
+    .flashes { list-style: none; padding: 0; }
+    .flashes li { padding: 0.5rem 0.75rem; border-radius: 4px; margin-bottom: 0.5rem; }
+    .flashes .success { background: #d1fae5; color: #065f46; }
+    .flashes .warning { background: #fef3c7; color: #92400e; }
+    .flashes .error { background: #fee2e2; color: #991b1b; }
+  </style>
+</head>
+<body>
+  <p><a href="{{ url_for('forks.show_fork_form', session_id=parent.session_id) }}">← New fork from parent</a></p>
+  <h1>Fork detail</h1>
+  <p class="subtitle">
+    <code>{{ fork.fork_id }}</code> ·
+    <span class="badge kind">{{ fork.fork_kind }}</span> ·
+    <span class="badge init">initiated_by={{ fork.initiated_by }}</span>
+  </p>
+
+  {% if flashes %}
+  <ul class="flashes">
+    {% for category, message in flashes %}
+      <li class="{{ category }}">{{ message }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <div class="row">
+    <div class="card">
+      <h2>Parent session</h2>
+      <p>
+        <code>{{ parent.session_id }}</code><br />
+        <span class="badge {{ parent.session_type }}">{{ parent.session_type }}</span>
+        <span class="meta">status={{ parent.status }}</span>
+      </p>
+    </div>
+    <div class="card">
+      <h2>Child session</h2>
+      <p>
+        <code>{{ child.session_id }}</code><br />
+        <span class="badge {{ child.session_type }}">{{ child.session_type }}</span>
+        <span class="meta">status={{ child.status }}</span>
+      </p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Fork reason</h2>
+    <p>{{ fork.fork_reason or '(no reason supplied)' }}</p>
+  </div>
+
+  <div class="card">
+    <h2>Summary (inherited)</h2>
+    <p>{{ fork.summary_ref or '(empty)' }}</p>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h2>Decisions</h2>
+      <pre>{{ fork.decisions_json | tojson(indent=2) if fork.decisions_json else 'null' }}</pre>
+    </div>
+    <div class="card">
+      <h2>Assumptions</h2>
+      <pre>{{ fork.assumptions_json | tojson(indent=2) if fork.assumptions_json else 'null' }}</pre>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h2>Open questions</h2>
+      <pre>{{ fork.open_questions_json | tojson(indent=2) if fork.open_questions_json else 'null' }}</pre>
+    </div>
+    <div class="card">
+      <h2>Relevant artifacts</h2>
+      <pre>{{ fork.relevant_artifacts_json | tojson(indent=2) if fork.relevant_artifacts_json else 'null' }}</pre>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Checkpoint</h2>
+    <p class="meta">bootstrap_context_role_internal = <code>{{ fork.bootstrap_context_role_internal }}</code></p>
+    <pre>{{ fork.checkpoint_json | tojson(indent=2) if fork.checkpoint_json else 'null' }}</pre>
+  </div>
+
+  <p class="meta">created_at = {{ fork.created_at }}</p>
+</body>
+</html>

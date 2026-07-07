@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Session Config — {{ session.title or session.session_id[:12] }}…{% endblock %}
+
+{% block content %}
+<div style="max-width: 720px; margin: 0 auto; padding: 24px;">
+  <p style="margin-bottom: 20px;">
+    <a href="{{ url_for('channels.list_by_type', session_type=session.session_type) }}" style="color:var(--ink-secondary);">← Back to {{ session.session_type }} sessions</a>
+  </p>
+
+  <h1 style="margin-bottom: 24px;">Session Configuration</h1>
+
+  {# ── Title ── #}
+  <div class="card" style="margin-bottom: 12px;">
+    <h3>Title</h3>
+    <form method="post" action="{{ url_for('sessions.update_title', session_id=session.session_id) }}" style="display:flex; gap:8px; align-items:center;">
+      <input type="text" name="title" value="{{ session.title or '' }}" placeholder="Session name…" style="flex:1;">
+      <button type="submit" class="btn btn-primary btn-sm">Save</button>
+    </form>
+  </div>
+
+  {# ── Tool Call Limit ── #}
+  <div class="card" style="margin-bottom: 12px;">
+    <h3>Tool Call Limit</h3>
+    <p class="muted" style="margin-bottom: 8px;">
+      Maximum number of tool iterations per agent response.
+      Default: chat=5, research=10, work=25.
+    </p>
+    <form method="post" action="{{ url_for('sessions.update_max_tool_iterations', session_id=session.session_id) }}" style="display:flex; gap:8px; align-items:center;">
+      <input type="number" name="max_tool_iterations" value="{{ session.max_tool_iterations or 5 }}" min="1" max="200" style="width:100px;">
+      <button type="submit" class="btn btn-primary btn-sm">Save</button>
+    </form>
+  </div>
+
+  {# ── Info ── #}
+  <div class="card" style="margin-bottom: 12px;">
+    <h3>Info</h3>
+    <div class="kv-row" style="margin-bottom: 4px;"><span class="k">Session ID</span><code>{{ session.session_id }}</code></div>
+    <div class="kv-row" style="margin-bottom: 4px;"><span class="k">Type</span><span class="badge badge-{{ session.session_type }}">{{ session.session_type }}</span></div>
+    <div class="kv-row" style="margin-bottom: 4px;"><span class="k">Status</span><span class="badge badge-{{ session.status }}">{{ session.status }}</span></div>
+    <div class="kv-row" style="margin-bottom: 4px;"><span class="k">Workspace</span><code>{{ workspace.name if workspace else session.workspace_id[:12] ~ '…' }}</code></div>
+    <div class="kv-row" style="margin-bottom: 4px;"><span class="k">Created</span>{{ session.created_at|float|default(0)|int|datetime }}</div>
+    {% if channel %}
+      <div class="kv-row" style="margin-bottom: 4px;"><span class="k">Channel</span><code>{{ channel.title or channel.channel_id[:12] ~ '…' }}</code></div>
+    {% endif %}
+  </div>
+
+  {# ── Participants ── #}
+  <div class="card" style="margin-bottom: 12px;">
+    <h3>Participants</h3>
+    {% if participants %}
+      {% for p in participants %}
+        <div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border);">
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--chat);display:inline-block;"></span>
+          <span style="flex:1;">{{ p.agent_name }}</span>
+          <span class="muted" style="font-size:11px;">{{ p.role_name or 'member' }}</span>
+          <form method="post" action="{{ url_for('sessions.remove_participant', session_id=session.session_id, participant_id=p.participant_id) }}" class="inline">
+            <button type="submit" class="btn btn-sm btn-danger">Remove</button>
+          </form>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p class="muted">No participants.</p>
+    {% endif %}
+  </div>
+
+  {# ── Danger Zone ── #}
+  <div class="card" style="border-color: var(--danger); margin-bottom: 12px;">
+    <h3 style="color: var(--danger);">Danger Zone</h3>
+    <p class="muted" style="margin-bottom: 12px;">Deleting a session removes all messages, tool invocations, runs, and participant bindings. This cannot be undone.</p>
+    <form method="post" action="{{ url_for('sessions.delete_session', session_id=session.session_id) }}"
+          onsubmit="return confirm('Delete this session permanently? All messages and runs will be lost.');">
+      <button type="submit" class="btn btn-danger">Delete this session</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,68 @@
+{% extends "settings/base.html" %}
+
+{% block title %}Settings — Tools{% endblock %}
+
+{% block settings_content %}
+<div class="panel">
+  <h2>Tool-Katalog</h2>
+  <p class="muted">
+    Diese Liste zeigt alle Tools, die der Agent-Runtime bekannt sind.
+    Pro Tool siehst du, an welche Harness es gebunden ist und welche
+    Permission-Klasse es hat. Builtin-Tools können nicht gelöscht
+    werden, aber über die Checkbox aktiviert/deaktiviert.
+  </p>
+
+  {% if tools %}
+  <table data-testid="tools-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Harness</th>
+        <th>Adapter-Methode</th>
+        <th>Permission</th>
+        <th>Beschreibung</th>
+        <th>Aktiv</th>
+        <th>Builtin</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in tools %}
+      <tr data-testid="tool-row" data-tool-id="{{ t.tool_id }}" data-harness="{{ t.harness_type }}">
+        <td><code>{{ t.name }}</code></td>
+        <td><span class="pill kind-{{ t.harness_type }}">{{ t.harness_type }}</span></td>
+        <td><code>{{ t.adapter_method }}</code></td>
+        <td><span class="pill status-{{ t.permission_class }}">{{ t.permission_class }}</span></td>
+        <td><span class="muted">{{ t.description[:80] }}{% if t.description|length > 80 %}…{% endif %}</span></td>
+        <td>
+          <form method="post" action="{{ url_for('settings.tool_toggle', tool_id=t.tool_id) }}" class="inline">
+            <button type="submit" class="secondary" data-testid="tool-toggle">
+              {% if t.is_enabled %}aktiv{% else %}inaktiv{% endif %}
+            </button>
+          </form>
+        </td>
+        <td>{% if t.is_builtin %}<span class="pill">builtin</span>{% else %}<span class="muted">custom</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Noch keine Tools im Katalog. Die Builtin-Tools werden beim App-Start automatisch angelegt.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Permission-Klassen</h2>
+  <p class="muted">
+    <code>read_only</code>: nur Lesezugriff, immer erlaubt.<br>
+    <code>write_local</code>: schreibt auf das Workbench-Host (Shell, Files).<br>
+    <code>write_remote</code>: schreibt auf entfernte Hosts via SSH.<br>
+    <code>destructive</code>: löscht Daten, killt Prozesse, force-cancels. Nur in Work-Sessions.
+  </p>
+  <p class="muted">
+    Die effektive Tool-Sicht pro Agent wird per Session-Policy gefiltert:
+    <code>chat</code> = nur <code>read_only</code>,
+    <code>research</code> = <code>read_only</code> + <code>write_local</code>,
+    <code>work</code> = alles.
+  </p>
+</div>
+{% endblock %}

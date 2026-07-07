@@ -1,0 +1,293 @@
+{% extends "base.html" %}
+{% block title %}Session — {{ session.title or session.session_id[:12] }}…{% endblock %}
+
+{% block content %}
+<div class="chat-layout">
+  {# ── Main Chat Area ── #}
+  <div class="chat-main">
+    {# Header #}
+    <div class="chat-header">
+      <a href="{% if request.args.get('back') %}{{ request.args.get('back') }}{% else %}{{ url_for('channels.list_by_type', session_type=session.session_type) }}{% endif %}" class="back-btn">←</a>
+      <span class="badge badge-{{ session.session_type }}">{{ session.session_type }}</span>
+      <span class="badge badge-{{ session.status }}">{{ session.status }}</span>
+      <div style="font-size:13px; color:var(--ink-secondary); flex:1; display:flex; align-items:center; gap:8px;">
+        <form method="post" action="{{ url_for('sessions.update_title', session_id=session.session_id) }}" class="inline" style="display:flex; align-items:center; gap:4px; flex:1;">
+          <input type="text" name="title" value="{{ session.title or '' }}" placeholder="Session name…"
+                 style="background:transparent; border:1px solid transparent; color:var(--ink); font-size:13px; padding:4px 8px; flex:1; min-width:100px; border-radius:4px;"
+                 onfocus="this.style.borderColor='var(--border)'" onblur="this.style.borderColor='transparent'">
+          <button type="submit" class="btn btn-sm" style="font-size:11px; padding:2px 8px;">Rename</button>
+        </form>
+      </div>
+      <div style="display:flex; gap:4px;">
+        <form method="post" action="{{ url_for('sessions.update_status', session_id=session.session_id) }}" class="inline">
+          <select name="status" onchange="this.form.submit()" style="font-size:12px; padding:4px 8px;">
+            {% for s in session_statuses %}
+              <option value="{{ s }}" {% if s == session.status %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </form>
+        <form method="get" action="{{ url_for('channels.fork_channel', channel_id=channel.channel_id) if channel else '#' }}" class="inline">
+          <button type="submit" class="btn btn-sm" {% if not channel %}disabled{% endif %}>Fork</button>
+        </form>
+        <form method="post" action="{{ url_for('sessions.delete_session', session_id=session.session_id) }}" class="inline"
+              onsubmit="return confirm('Delete this session and all its messages? This cannot be undone.');">
+          <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+        </form>
+      </div>
+    </div>
+
+    {# Participants bar #}
+    <div style="padding:8px 24px; border-bottom:1px solid var(--border); display:flex; gap:6px; flex-wrap:wrap; align-items:center; background:var(--bg-secondary);">
+      <span style="font-size:11px; color:var(--ink-muted); font-weight:500;">Participants:</span>
+      {% if participants %}
+        {% for p in participants %}
+          <span class="chip" style="display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border:1px solid var(--border); border-radius:999px; font-size:11px; background:var(--panel);">
+            <span style="width:6px;height:6px;border-radius:50%;background:var(--chat);display:inline-block;"></span>
+            {{ p.agent_name }}
+            <form method="post" action="{{ url_for('sessions.remove_participant', session_id=session.session_id, participant_id=p.participant_id) }}" class="inline" style="margin:0;">
+              <button type="submit" class="btn-icon" style="font-size:12px; padding:0 2px;">×</button>
+            </form>
+          </span>
+        {% endfor %}
+      {% else %}
+        <span class="muted" style="font-size:11px;">None</span>
+      {% endif %}
+      <form method="post" action="{{ url_for('sessions.add_participant', session_id=session.session_id) }}" class="inline" style="margin-left:auto; display:flex; gap:4px;">
+        <select name="agent_profile_id" style="font-size:11px; padding:2px 6px;">
+          <option value="">+ Add agent</option>
+          {% for profile in available_agents %}
+            <option value="{{ profile.agent_profile_id }}">{{ profile.name }}</option>
+          {% endfor %}
+        </select>
+        <input type="hidden" name="participant_role" value="member">
+        <button type="submit" class="btn btn-sm" style="font-size:11px; padding:2px 8px;">Add</button>
+      </form>
+    </div>
+
+    {# ── Agent Working Indicator ── #}
+    <div id="agent-working-bar" style="display:none; padding:8px 24px; border-bottom:1px solid var(--border); background:var(--accent-bg);">
+      <div id="agent-working-content" style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <span style="font-size:12px; font-weight:600; color:var(--accent);">⏳ Working…</span>
+        <span id="agent-working-detail" class="muted" style="font-size:11px;"></span>
+        <div style="margin-left:auto; display:flex; gap:6px;">
+          <button id="btn-stop-agent" class="btn btn-sm btn-danger" style="display:none;" onclick="stopAgent()">■ Stop</button>
+        </div>
+      </div>
+    </div>
+
+    {# Messages #}
+    <div class="chat-messages" id="message-thread">
+      <div id="message-list"
+           data-session-id="{{ session.session_id }}"
+           data-after="{{ messages[-1].created_at if messages else 0 }}">
+        {% for message in messages %}
+          {% include "message_row.html" %}
+        {% else %}
+          <div class="empty-state" style="padding:40px 20px;">
+            <div class="empty-icon">💬</div>
+            <h3>No messages yet</h3>
+            <p class="muted">Send a message to start the conversation.</p>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {# Input #}
+    <div class="chat-input-area">
+      <form method="post" action="{{ url_for('sessions.post_message', session_id=session.session_id) }}" class="chat-input-row">
+        <textarea name="body" placeholder="Type a message…" required></textarea>
+        <input type="hidden" name="user_id" value="web-user">
+        <input type="hidden" name="message_kind" value="conversation">
+        <button type="submit" class="btn btn-primary">Send</button>
+      </form>
+    </div>
+  </div>
+
+  {# ── Tool Call Detail Panel ── #}
+  <div class="toolcall-detail-panel" id="toolcall-panel">
+    <div class="panel-header">
+      <h3 id="toolcall-panel-title">Tool Call Details</h3>
+      <button class="btn-icon" onclick="closeToolPanel()">✕</button>
+    </div>
+    <div class="panel-body" id="toolcall-body">
+      <div class="empty-state" style="padding:20px 0;">
+        <p class="muted">Click a tool call or work step to see details.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Scripts ── #}
+<script>
+var sessionId = '{{ session.session_id }}';
+var pollTimer = null;
+
+function openToolPanel(invocationId) {
+  var panel = document.getElementById('toolcall-panel');
+  var body = document.getElementById('toolcall-body');
+  var title = document.getElementById('toolcall-panel-title');
+  panel.classList.add('open');
+  title.textContent = 'Tool Call Details';
+
+  fetch('/invocations/' + invocationId + '/detail')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var html = '<div class="detail-section">';
+      html += '<h4>Tool</h4>';
+      html += '<div class="kv-row"><span class="k">Name</span><span>' + escapeHtml(data.tool_name) + '</span></div>';
+      html += '<div class="kv-row"><span class="k">Harness</span><span>' + escapeHtml(data.tool_harness_type) + '</span></div>';
+      html += '<div class="kv-row"><span class="k">Status</span><span class="badge badge-' + data.status + '">' + data.status + '</span></div>';
+      html += '</div>';
+
+      if (data.arguments_json) {
+        html += '<div class="detail-section">';
+        html += '<h4>Arguments</h4>';
+        html += '<pre>' + escapeHtml(JSON.stringify(data.arguments_json, null, 2)) + '</pre>';
+        html += '</div>';
+      }
+
+      if (data.result_text) {
+        html += '<div class="detail-section">';
+        html += '<h4>Result</h4>';
+        html += '<pre>' + escapeHtml(data.result_text) + '</pre>';
+        html += '</div>';
+      }
+
+      if (data.error_text) {
+        html += '<div class="detail-section">';
+        html += '<h4>Error</h4>';
+        html += '<pre style="color:var(--danger);">' + escapeHtml(data.error_text) + '</pre>';
+        html += '</div>';
+      }
+
+      if (data.harness_run_id) {
+        html += '<div class="detail-section">';
+        html += '<h4>Harness Run</h4>';
+        html += '<a href="/runs/' + data.harness_run_id + '" class="btn btn-sm">View Run →</a>';
+        html += '</div>';
+      }
+
+      body.innerHTML = html;
+    })
+    .catch(function() {
+      body.innerHTML = '<div class="empty-state"><p class="muted">Failed to load details.</p></div>';
+    });
+}
+
+function openWorkPanel(invocationId, toolName, toolArgs, toolResult, status) {
+  var panel = document.getElementById('toolcall-panel');
+  var body = document.getElementById('toolcall-body');
+  var title = document.getElementById('toolcall-panel-title');
+  panel.classList.add('open');
+  title.textContent = 'Work Step: ' + escapeHtml(toolName);
+
+  var html = '<div class="detail-section">';
+  html += '<h4>Tool</h4>';
+  html += '<div class="kv-row"><span class="k">Name</span><span>' + escapeHtml(toolName) + '</span></div>';
+  html += '<div class="kv-row"><span class="k">Status</span><span class="badge badge-' + status + '">' + status + '</span></div>';
+  html += '</div>';
+
+  if (toolArgs && Object.keys(toolArgs).length) {
+    html += '<div class="detail-section">';
+    html += '<h4>Arguments</h4>';
+    html += '<pre>' + escapeHtml(JSON.stringify(toolArgs, null, 2)) + '</pre>';
+    html += '</div>';
+  }
+
+  if (toolResult) {
+    html += '<div class="detail-section">';
+    html += '<h4>Result</h4>';
+    html += '<pre>' + escapeHtml(toolResult) + '</pre>';
+    html += '</div>';
+  }
+
+  if (invocationId) {
+    html += '<div class="detail-section">';
+    html += '<a href="/invocations/' + invocationId + '/detail" class="btn btn-sm">View full invocation →</a>';
+    html += '</div>';
+  }
+
+  body.innerHTML = html;
+}
+
+function closeToolPanel() {
+  document.getElementById('toolcall-panel').classList.remove('open');
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Agent status polling ──────────────────────────────────────────
+
+function pollAgentStatus() {
+  fetch('/sessions/' + sessionId + '/agent-status')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var agents = data.agents || [];
+      var bar = document.getElementById('agent-working-bar');
+      var detail = document.getElementById('agent-working-detail');
+      var stopBtn = document.getElementById('btn-stop-agent');
+
+      if (agents.length === 0) {
+        bar.style.display = 'none';
+        stopBtn.style.display = 'none';
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+        return;
+      }
+
+      bar.style.display = 'block';
+      var working = agents.filter(function(a) { return a.status === 'working'; });
+      if (working.length > 0) {
+        var w = working[0];
+        var step = w.current_step;
+        if (step) {
+          detail.textContent = w.agent_name + ' — ' + step.tool_name + ' (#' + step.iteration + ')';
+        } else {
+          detail.textContent = w.agent_name + ' — waiting for LLM…';
+        }
+        stopBtn.style.display = 'inline-flex';
+        stopBtn.dataset.agentName = w.agent_name;
+      } else {
+        var done = agents.filter(function(a) { return a.status === 'completed' || a.status === 'error' || a.status === 'stopped'; });
+        if (done.length > 0) {
+          detail.textContent = 'Done.';
+          stopBtn.style.display = 'none';
+          // Stop polling after a short delay
+          if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+          }
+        }
+      }
+    })
+    .catch(function() {});
+}
+
+function stopAgent() {
+  var btn = document.getElementById('btn-stop-agent');
+  var agentName = btn.dataset.agentName || '';
+  if (!agentName) return;
+
+  var form = document.createElement('form');
+  form.method = 'POST';
+  form.action = '/sessions/' + sessionId + '/stop-agent';
+  var input = document.createElement('input');
+  input.type = 'hidden';
+  input.name = 'agent_name';
+  input.value = agentName;
+  form.appendChild(input);
+  document.body.appendChild(form);
+  form.submit();
+}
+
+// Start polling when page loads
+document.addEventListener('DOMContentLoaded', function() {
+  pollTimer = setInterval(pollAgentStatus, 1000);
+});
+</script>
+{% endblock %}

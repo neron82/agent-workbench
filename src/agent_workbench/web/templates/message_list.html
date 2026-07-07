@@ -1,0 +1,7 @@
+{% if messages %}
+  {% for message in messages %}
+    {% include "message_row.html" %}
+  {% endfor %}
+{% else %}
+  <p class="muted">No messages for session {{ session_id }}.</p>
+{% endif %}

@@ -1,0 +1,196 @@
+{% extends "settings/base.html" %}
+{% block title %}Settings — Provider{% endblock %}
+
+{% block settings_content %}
+<div class="settings-section">
+  <h2>New Provider</h2>
+  <div class="card">
+    <p class="muted" style="margin-bottom:12px;">API keys are stored locally in <code>{{ secrets_file }}</code> and read on each request. No server restart needed.</p>
+
+    <div style="margin-bottom:12px; display:flex; gap:8px; flex-wrap:wrap;">
+      <span class="muted" style="font-size:12px; line-height:32px;">Presets:</span>
+      {% for key, preset in presets.items() %}
+        <button type="button" class="btn btn-sm preset-btn"
+                data-name="{{ preset.name }}"
+                data-endpoint="{{ preset.endpoint_url }}"
+                data-kind="{{ preset.provider_kind }}">
+          {{ preset.name }}
+        </button>
+      {% endfor %}
+      <button type="button" class="btn btn-sm preset-btn" data-name="" data-endpoint="" data-kind="openai_compatible">
+        Custom
+      </button>
+    </div>
+
+    <form method="post" action="{{ url_for('settings.create_provider') }}" id="create-provider-form">
+      <div class="form-row">
+        <label>Name</label>
+        <input type="text" name="name" id="new-name" required>
+        <label>Type</label>
+        <select name="provider_kind" id="new-kind">
+          <option value="openai_compatible">openai_compatible</option>
+          <option value="mock">mock</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Endpoint URL</label>
+        <input type="text" name="endpoint_url" id="new-endpoint" style="flex:1;" placeholder="http://host:port/v1">
+        <label><input type="checkbox" name="is_enabled" value="1" checked> enabled</label>
+      </div>
+      <div class="form-row">
+        <label>API key</label>
+        <input type="password" name="api_key_value" id="new-api-key" placeholder="optional; stored locally" style="flex:1;">
+      </div>
+      <div class="form-row" id="model-row" style="display:none;">
+        <label>Model</label>
+        <select name="default_model" id="new-model" style="flex:1;">
+          <option value="">— select model —</option>
+        </select>
+        <span id="model-status" class="muted" style="font-size:12px;"></span>
+      </div>
+      <div class="form-row">
+        <label>config_json</label>
+        <textarea name="config_json" rows="2" style="flex:1;" placeholder='{"temperature": 0.4, "timeout_seconds": 30}'></textarea>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <button type="button" class="btn" id="test-and-fetch-btn">🔍 Test &amp; Fetch Models</button>
+        <button type="submit" class="btn btn-primary">Create provider</button>
+        <span id="test-result" class="muted" style="font-size:12px;"></span>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="settings-section">
+  <h2>Providers</h2>
+  {% for provider in providers %}
+    <div class="card card-hover" style="margin-bottom:8px;">
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
+        <strong>{{ provider.name }}</strong>
+        <span class="badge badge-{{ provider.provider_kind }}">{{ provider.provider_kind }}</span>
+        {% if provider.is_enabled %}<span class="badge badge-active">active</span>{% else %}<span class="badge badge-done">disabled</span>{% endif %}
+        <span class="muted" style="font-size:11px;">{{ provider.provider_id[:12] }}…</span>
+      </div>
+      <form method="post" action="{{ url_for('settings.update_provider', provider_id=provider.provider_id) }}">
+        <div class="form-row">
+          <label>Name</label>
+          <input type="text" name="name" value="{{ provider.name }}" required>
+          <label>Type</label>
+          <select name="provider_kind">
+            <option value="mock" {% if provider.provider_kind == 'mock' %}selected{% endif %}>mock</option>
+            <option value="openai_compatible" {% if provider.provider_kind == 'openai_compatible' %}selected{% endif %}>openai_compatible</option>
+          </select>
+          <label>Default model</label>
+          <input type="text" name="default_model" value="{{ provider.default_model or '' }}">
+        </div>
+        <div class="form-row">
+          <label>Endpoint URL</label>
+          <input type="text" name="endpoint_url" value="{{ provider.endpoint_url or '' }}" style="flex:1;">
+          <label>API key alias</label>
+          <input type="text" name="api_key_env_var" value="{{ provider.api_key_env_var or '' }}">
+          <label><input type="checkbox" name="is_enabled" value="1" {% if provider.is_enabled %}checked{% endif %}> enabled</label>
+        </div>
+        <div class="form-row">
+          <label>New API key</label>
+          <input type="password" name="api_key_value" placeholder="leave empty = unchanged" style="flex:1;">
+          <label><input type="checkbox" name="clear_saved_api_key" value="1"> clear saved key</label>
+        </div>
+        <div class="form-row">
+          <label>config_json</label>
+          <textarea name="config_json" rows="2" style="flex:1;">{{ provider.config_json | tojson if provider.config_json else '' }}</textarea>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button type="submit" class="btn btn-primary btn-sm">Save</button>
+          <button type="submit" formaction="{{ url_for('settings.delete_provider', provider_id=provider.provider_id) }}" class="btn btn-sm btn-danger">Delete</button>
+        </div>
+      </form>
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <p class="muted">No providers configured yet.</p>
+    </div>
+  {% endfor %}
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  const nameEl    = document.getElementById('new-name');
+  const kindEl    = document.getElementById('new-kind');
+  const endpointEl = document.getElementById('new-endpoint');
+  const apiKeyEl  = document.getElementById('new-api-key');
+  const modelRow  = document.getElementById('model-row');
+  const modelEl   = document.getElementById('new-model');
+  const modelStatus = document.getElementById('model-status');
+  const testBtn   = document.getElementById('test-and-fetch-btn');
+  const testResult = document.getElementById('test-result');
+
+  // ── Preset buttons ──────────────────────────────────────────────
+  document.querySelectorAll('.preset-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      nameEl.value     = btn.dataset.name;
+      endpointEl.value = btn.dataset.endpoint;
+      kindEl.value     = btn.dataset.kind;
+      // Clear model selection when switching presets
+      modelRow.style.display = 'none';
+      modelEl.innerHTML = '<option value="">— select model —</option>';
+      testResult.textContent = '';
+    });
+  });
+
+  // ── Test & Fetch Models ─────────────────────────────────────────
+  testBtn.addEventListener('click', function() {
+    const endpoint = endpointEl.value.trim();
+    const apiKey   = apiKeyEl.value.trim();
+    const kind     = kindEl.value;
+
+    if (!endpoint) {
+      testResult.textContent = '⚠️ Enter an endpoint URL first';
+      return;
+    }
+
+    testBtn.disabled = true;
+    testBtn.textContent = '⏳ Testing…';
+    testResult.textContent = '';
+    modelRow.style.display = 'none';
+    modelEl.innerHTML = '<option value="">— select model —</option>';
+
+    fetch('{{ url_for("settings.test_and_fetch_models") }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        endpoint_url: endpoint,
+        api_key: apiKey,
+        provider_kind: kind,
+      }),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.ok) {
+        testResult.textContent = '✅ ' + data.models.length + ' models found';
+        modelEl.innerHTML = '<option value="">— select model —</option>';
+        data.models.forEach(function(m) {
+          var opt = document.createElement('option');
+          opt.value = m;
+          opt.textContent = m;
+          modelEl.appendChild(opt);
+        });
+        modelRow.style.display = 'flex';
+        modelStatus.textContent = '';
+      } else {
+        testResult.textContent = '❌ ' + (data.error || 'Unknown error');
+        modelStatus.textContent = data.error;
+      }
+    })
+    .catch(function(err) {
+      testResult.textContent = '❌ Network error: ' + err.message;
+    })
+    .finally(function() {
+      testBtn.disabled = false;
+      testBtn.textContent = '🔍 Test & Fetch Models';
+    });
+  });
+})();
+</script>
+{% endblock %}

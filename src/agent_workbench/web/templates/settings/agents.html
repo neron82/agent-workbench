@@ -1,0 +1,105 @@
+{% extends "settings/base.html" %}
+
+{% block title %}Settings — Agents{% endblock %}
+
+{% block settings_content %}
+<div class="settings-section">
+  <h2>New Agent</h2>
+  <div class="card">
+    <form method="post" action="{{ url_for('settings.create_agent') }}">
+      <div class="form-row">
+        <label>Name</label>
+        <input type="text" name="name" required>
+        <label>Provider</label>
+        <select name="provider_ref" required>
+          <option value="">— select —</option>
+          {% for provider in providers %}
+            <option value="{{ provider.provider_id }}">{{ provider.name }}</option>
+          {% endfor %}
+        </select>
+        <label>Model</label>
+        <input type="text" name="model_ref" placeholder="optional; falls leer: Provider-Default">
+      </div>
+      <div class="form-row">
+        <label>Role</label>
+        <select name="function_ref" required>
+          <option value="">— select —</option>
+          {% for role in roles %}
+            <option value="{{ role.role_id }}">{{ role.name }}</option>
+          {% endfor %}
+        </select>
+        <label>Perspective</label>
+        <input type="text" name="perspective_ref" placeholder="e.g. strict, pragmatic">
+        <label>Harness</label>
+        <select name="harness_ref">
+          <option value="">—</option>
+          {% for harness in harness_options %}
+            <option value="{{ harness }}">{{ harness }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-row">
+        <label>capability_hints_json</label>
+        <textarea name="capability_hints_json" rows="2" style="flex:1;" placeholder='{"tools": ["chat"]}'></textarea>
+      </div>
+      <button type="submit" class="btn btn-primary">Create agent</button>
+    </form>
+  </div>
+</div>
+
+<div class="settings-section">
+  <h2>Agents</h2>
+  {% for agent in agents %}
+    <div class="card card-hover" style="margin-bottom:8px;">
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
+        <strong>{{ agent.name }}</strong>
+        <span class="badge badge-active">v{{ agent.version }}</span>
+        <span class="muted" style="font-size:11px;">{{ agent.agent_profile_id[:12] }}…</span>
+      </div>
+      <form method="post" action="{{ url_for('settings.update_agent', agent_profile_id=agent.agent_profile_id) }}">
+        <div class="form-row">
+          <label>Name</label>
+          <input type="text" name="name" value="{{ agent.name }}" required>
+          <label>Provider</label>
+          <select name="provider_ref" required>
+            {% for provider in providers %}
+              <option value="{{ provider.provider_id }}" {% if provider.provider_id == agent.provider_ref %}selected{% endif %}>{{ provider.name }}</option>
+            {% endfor %}
+          </select>
+          <label>Model</label>
+          <input type="text" name="model_ref" value="{{ agent.model_ref or '' }}">
+        </div>
+        <div class="form-row">
+          <label>Role</label>
+          <select name="function_ref" required>
+            {% for role in roles %}
+              <option value="{{ role.role_id }}" {% if role.role_id == agent.function_ref %}selected{% endif %}>{{ role.name }}</option>
+            {% endfor %}
+          </select>
+          <label>Perspective</label>
+          <input type="text" name="perspective_ref" value="{{ agent.perspective_ref or '' }}">
+          <label>Harness</label>
+          <select name="harness_ref">
+            <option value="">—</option>
+            {% for harness in harness_options %}
+              <option value="{{ harness }}" {% if harness == agent.harness_ref %}selected{% endif %}>{{ harness }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-row">
+          <label>capability_hints_json</label>
+          <textarea name="capability_hints_json" rows="2" style="flex:1;">{{ agent.capability_hints_json | tojson if agent.capability_hints_json else '' }}</textarea>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button type="submit" class="btn btn-primary btn-sm">Save as new version</button>
+          <button type="submit" formaction="{{ url_for('settings.delete_agent', agent_profile_id=agent.agent_profile_id) }}" class="btn btn-sm btn-danger">Delete</button>
+        </div>
+      </form>
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <p class="muted">No agents configured yet.</p>
+    </div>
+  {% endfor %}
+</div>
+{% endblock %}

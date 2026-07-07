@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Run {{ run.harness_run_id }} — {{ run.status }}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1080px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; }
+    h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #ddd; padding-bottom: 0.25rem; }
+    .grid { display: grid; grid-template-columns: 14rem 1fr; gap: 0.4rem 1rem; }
+    .grid dt { font-weight: 600; color: #444; }
+    .status { padding: 0.25rem 0.6rem; border-radius: 4px; background: #eee; }
+    .status.running { background: #c5e3ff; }
+    .status.completed { background: #d3f9d8; }
+    .status.failed, .status.cancelled { background: #ffe3e3; }
+    .controls { display: flex; gap: 0.5rem; margin: 1rem 0; flex-wrap: wrap; }
+    .controls form { display: inline; }
+    .controls button {
+      padding: 0.5rem 1rem; border: 1px solid #999; border-radius: 4px;
+      background: #fafafa; cursor: pointer; font-size: 1rem;
+    }
+    .controls button:disabled {
+      background: #f0f0f0; color: #888; cursor: not-allowed;
+    }
+    .cap-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.25rem 1rem; }
+    pre { background: #f6f6f6; padding: 0.6rem; border-radius: 4px; overflow-x: auto; }
+    .meta { color: #555; font-size: 0.9rem; }
+    .warnings, .errors { padding: 0.5rem 0.75rem; border-radius: 4px; }
+    .warnings { background: #fff3bf; }
+    .errors { background: #ffe3e3; }
+  </style>
+</head>
+<body>
+  <h1>Run <code>{{ run.harness_run_id }}</code></h1>
+  <p>
+    <span class="status {{ run.status }}" data-testid="status">{{ run.status }}</span>
+    <span class="meta">· harness <strong>{{ run.harness_type }}</strong></span>
+    {% if run.started_at %}<span class="meta">· started at {{ "%.0f"|format(run.started_at) }}</span>{% endif %}
+    {% if run.ended_at %}<span class="meta">· ended at {{ "%.0f"|format(run.ended_at) }}</span>{% endif %}
+  </p>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <ul class="flashes">
+        {% for category, msg in messages %}
+          <li class="flash {{ category }}">{{ msg }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  {% endwith %}
+
+  {# ----- Capability-aware control surface (UI spec §4, §12) ---------- #}
+  <h2>Controls</h2>
+  <p class="meta">Only controls the harness actually supports are active.  Unsupported controls are disabled with a precise reason.</p>
+  <div class="controls" data-testid="controls">
+    {% for c in controls %}
+      {% if c.supported and c.endpoint %}
+        <form method="post" action="{{ url_for(c.endpoint, harness_run_id=run.harness_run_id) }}">
+          <button type="submit" data-testid="control-{{ c.key }}">{{ c.label }}</button>
+        </form>
+      {% elif c.supported and not c.endpoint %}
+        <button type="button"
+                disabled
+                title="Supported by harness but not yet implemented in MVP"
+                data-testid="control-{{ c.key }}"
+                data-supported="true"
+                data-reason="Not yet implemented">{{ c.label }}</button>
+      {% else %}
+        <button type="button"
+                disabled
+                title="{{ c.reason }}"
+                data-testid="control-{{ c.key }}"
+                data-supported="false"
+                data-reason="{{ c.reason }}">{{ c.label }}</button>
+      {% endif %}
+    {% endfor %}
+  </div>
+
+  <h2>Run details</h2>
+  <dl class="grid">
+    <dt>Status</dt><dd>{{ run.status }}</dd>
+    <dt>Objective</dt><dd>{{ objective or "(no task spec linked)" }}</dd>
+    <dt>Assigned profile</dt><dd>{{ profile_name or "(none)" }}</dd>
+    <dt>Perspective</dt><dd>{{ perspective or "(unspecified)" }}</dd>
+    <dt>Function</dt><dd>{{ function or "(unspecified)" }}</dd>
+    <dt>Harness</dt><dd>{{ run.harness_type }}</dd>
+    <dt>Runtime session</dt><dd>{{ run.runtime_session_id or "(none)" }}</dd>
+    <dt>Runtime process (PID)</dt><dd>{{ run.runtime_process_id or "(none)" }}</dd>
+    <dt>Process group (PGID)</dt><dd>{{ run.pgid or "(none)" }}</dd>
+    <dt>Remote process</dt><dd>{{ run.runtime_remote_process_id or "(none)" }}</dd>
+    <dt>Exit code</dt><dd>{{ run.exit_code if run.exit_code is not none else "(not yet exited)" }}</dd>
+    <dt>Exit signal</dt><dd>{{ run.exit_signal if run.exit_signal is not none else "(not signaled)" }}</dd>
+    <dt>Tool invocation</dt>
+    <dd>
+      {% if tool_invocation %}
+        <code>{{ tool_invocation.tool_name }}</code>
+        · status <span class="pill status-{{ tool_invocation.status }}">{{ tool_invocation.status }}</span>
+        · <code>{{ tool_invocation.invocation_id[:12] }}…</code>
+      {% else %}
+        <span class="muted">(not triggered by a tool call)</span>
+      {% endif %}
+    </dd>
+  </dl>
+
+  <h2>Declared adapter capabilities</h2>
+  <div class="cap-grid">
+    <div>can_stop: <strong>{{ capabilities.can_stop }}</strong></div>
+    <div>can_cancel: <strong>{{ capabilities.can_cancel }}</strong></div>
+    <div>can_pause: <strong>{{ capabilities.can_pause }}</strong></div>
+    <div>can_steer: <strong>{{ capabilities.can_steer }}</strong></div>
+    <div>can_shell: <strong>{{ capabilities.can_shell }}</strong></div>
+    <div>can_file_write: <strong>{{ capabilities.can_file_write }}</strong></div>
+    <div>can_diff: <strong>{{ capabilities.can_diff }}</strong></div>
+    <div>can_remote: <strong>{{ capabilities.can_remote }}</strong></div>
+    <div>can_replay: <strong>{{ capabilities.can_replay }}</strong></div>
+    <div>has_process_ids: <strong>{{ capabilities.has_process_ids }}</strong></div>
+  </div>
+
+  <h2>Transcript</h2>
+  {% if stdout or stderr %}
+    <h3>stdout</h3><pre data-testid="stdout">{{ stdout }}</pre>
+    <h3>stderr</h3><pre data-testid="stderr">{{ stderr }}</pre>
+  {% else %}
+    <p class="meta">(no transcript captured for this run)</p>
+  {% endif %}
+
+  <h2>Tools / events</h2>
+  {% if events %}
+    <ul data-testid="events">
+      {% for ev in events %}
+        <li>
+          <code>{{ ev.event_ts | int }}</code>
+          [{{ ev.event_type }}] {{ ev.event_source }}
+          {% if ev.event_payload_ref %}<span class="meta">· payload: {{ ev.event_payload_ref }}</span>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="meta">(no events recorded)</p>
+  {% endif %}
+
+  <h2>Lifecycle events</h2>
+  <p class="meta">Append-only event log for this run: start, stop, cancel, exit, status changes. Persists across server restarts.</p>
+  {% if lifecycle_events %}
+    <ul data-testid="lifecycle-events">
+      {% for ev in lifecycle_events %}
+        <li>
+          <code>{{ ev.created_at | int }}</code>
+          <strong>[{{ ev.event_type }}]</strong>
+          {% if ev.detail %}
+            {% for k, v in ev.detail.items() %}
+              <span class="meta">{{ k }}={{ v }}</span>{% if not loop.last %} ·{% endif %}
+            {% endfor %}
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="meta">(no lifecycle events recorded yet)</p>
+  {% endif %}
+
+  <h2>Artifacts</h2>
+  {% if artifacts %}
+    <ul data-testid="artifacts">
+      {% for a in artifacts %}
+        <li>
+          <code>{{ a.artifact_id }}</code> — {{ a.artifact_kind }}: {{ a.title or "(untitled)" }}
+          {% if a.content_ref %}<span class="meta">· {{ a.content_ref }}</span>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="meta">(no artifacts produced)</p>
+  {% endif %}
+
+  {% if warnings %}
+  <h2>Warnings</h2>
+  <ul class="warnings" data-testid="warnings">
+    {% for w in warnings %}<li>[{{ w.event_type }}] {{ w.event_source }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if errors %}
+  <h2>Errors</h2>
+  <ul class="errors" data-testid="errors">
+    {% for e in errors %}<li>[{{ e.event_type }}] {{ e.event_source }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+
+  {# ----- Verification surface (Phase 7) ----------------------------- #}
+  <h2>Verification</h2>
+  <p class="meta" data-testid="replay-equivalence-note">{{ replay_equivalence_note }}</p>
+  {% if verification.verification_ready %}
+    <p data-testid="verification-ready" data-ready="true" data-status="{{ verification.status }}">
+      <strong>Verification ready.</strong> Run status: <code>{{ verification.status }}</code>.
+    </p>
+  {% else %}
+    <p data-testid="verification-ready" data-ready="false" data-status="{{ verification.status }}">
+      <strong>Not yet verification ready.</strong> Run status: <code>{{ verification.status }}</code>.
+    </p>
+    {% if verification.blockers %}
+      <ul data-testid="verification-blockers">
+        {% for b in verification.blockers %}<li>{{ b }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+  {% endif %}
+
+  <h3>Reviews ({{ verification.reviews|length }})</h3>
+  {% if verification.reviews %}
+    <ul data-testid="verification-reviews">
+      {% for r in verification.reviews %}
+        <li>
+          <code>{{ r.target_kind }}</code> ·
+          verdict <strong>{{ r.verdict }}</strong>
+          {% if r.findings_ref %}· {{ r.findings_ref }}{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="meta">(no reviews recorded yet)</p>
+  {% endif %}
+
+  <h3>Record a review for this run</h3>
+  <form method="post" action="{{ url_for('reviews.create_run_review', harness_run_id=run.harness_run_id) }}" data-testid="run-review-form">
+    <label for="verdict">Verdict</label>
+    <select name="verdict" id="verdict">
+      <option value="pass">pass</option>
+      <option value="conditional">conditional</option>
+      <option value="fail">fail</option>
+      <option value="blocked">blocked</option>
+    </select>
+    <label for="findings_ref">Findings ref (optional)</label>
+    <input type="text" name="findings_ref" id="findings_ref" />
+    <p><button type="submit" data-testid="run-review-submit">Record review</button></p>
+  </form>
+</body>
+</html>
