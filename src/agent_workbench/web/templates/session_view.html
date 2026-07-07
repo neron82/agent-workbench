@@ -2,42 +2,101 @@
 {% block title %}Session — {{ session.title or session.session_id[:12] }}…{% endblock %}
 
 {% block content %}
-<div class="chat-layout">
+<div class="chat-layout" style="position:relative;">
+  {# ── Collapsible Left Sidebar ── #}
+  <div class="side-panel-left" id="side-panel-left">
+    <div class="side-panel-body" id="side-body">
+      <div class="sp-section">
+        <h4>Agents</h4>
+        <div id="sp-agent-list">
+          {% if participants %}
+            {% for p in participants %}
+              <div class="sp-agent-row" data-agent="{{ p.agent_name }}">
+                <span class="sp-agent-dot" id="dot-{{ p.agent_name }}">🟢</span>
+                <span class="sp-agent-name">{{ p.agent_name }}</span>
+                <span class="sp-agent-status" id="status-{{ p.agent_name }}">idle</span>
+              </div>
+            {% endfor %}
+          {% else %}
+            <div class="sp-muted">No agents in this session</div>
+          {% endif %}
+        </div>
+      </div>
+      <div class="sp-section">
+        <h4>Stats</h4>
+        <div class="sp-stat-row"><span class="sp-stat-label">Turns</span><span class="sp-stat-value" id="sp-turns">{{ session.max_auto_turns or 0 }}</span></div>
+        <div class="sp-stat-row"><span class="sp-stat-label">Status</span><span class="badge badge-{{ session.status }}">{{ session.status }}</span></div>
+        <div class="sp-stat-row"><span class="sp-stat-label">Type</span><span class="badge badge-{{ session.session_type }}">{{ session.session_type }}</span></div>
+      </div>
+      <div class="sp-section">
+        <h4>Actions</h4>
+        <button class="btn btn-sm" style="width:100%; margin-bottom:4px;" onclick="document.getElementById('side-body').querySelector('select')?.focus()">+ Add Agent</button>
+        <button class="btn btn-sm btn-danger" style="width:100%;" id="sp-stop-all" onclick="stopAllAgents()">■ Stop All</button>
+      </div>
+    </div>
+  </div>
+  <div class="side-panel-toggle" id="side-toggle-btn" onclick="toggleSidePanel()" title="Toggle sidebar">▶</div>
   {# ── Main Chat Area ── #}
   <div class="chat-main">
-    {# Header #}
+    {# Header — simplified: back, title, badges, ⋮-menu #}
     <div class="chat-header">
       <a href="{% if request.args.get('back') %}{{ request.args.get('back') }}{% else %}{{ url_for('channels.list_by_type', session_type=session.session_type) }}{% endif %}" class="back-btn">←</a>
       <span class="badge badge-{{ session.session_type }}">{{ session.session_type }}</span>
       <span class="badge badge-{{ session.status }}">{{ session.status }}</span>
-      <div style="font-size:13px; color:var(--ink-secondary); flex:1; display:flex; align-items:center; gap:8px;">
-        <form method="post" action="{{ url_for('sessions.update_title', session_id=session.session_id) }}" class="inline" style="display:flex; align-items:center; gap:4px; flex:1;">
-          <input type="text" name="title" value="{{ session.title or '' }}" placeholder="Session name…"
-                 style="background:transparent; border:1px solid transparent; color:var(--ink); font-size:13px; padding:4px 8px; flex:1; min-width:100px; border-radius:4px;"
-                 onfocus="this.style.borderColor='var(--border)'" onblur="this.style.borderColor='transparent'">
-          <button type="submit" class="btn btn-sm" style="font-size:11px; padding:2px 8px;">Rename</button>
-        </form>
+      <div class="session-title-label" id="session-title-display"
+           style="flex:1; font-size:14px; font-weight:500; color:var(--ink); cursor:pointer; min-width:0;"
+           onclick="editTitle()">
+        {{ session.title or session.session_id[:12] ~ '…' }}
       </div>
-      <div style="display:flex; gap:4px;">
-        <form method="post" action="{{ url_for('sessions.update_max_auto_turns', session_id=session.session_id) }}" class="inline" style="display:flex; align-items:center; gap:4px;">
-          <label style="font-size:11px; color:var(--ink-muted); white-space:nowrap;">Turns</label>
-          <input type="number" name="max_auto_turns" value="{{ session.max_auto_turns or 0 }}" min="0" max="50" style="width:40px; font-size:11px; padding:2px 4px; text-align:center;">
-          <button type="submit" class="btn btn-sm" style="font-size:10px; padding:2px 6px;">↻</button>
-        </form>
-        <form method="post" action="{{ url_for('sessions.update_status', session_id=session.session_id) }}" class="inline">
-          <select name="status" onchange="this.form.submit()" style="font-size:12px; padding:4px 8px;">
-            {% for s in session_statuses %}
-              <option value="{{ s }}" {% if s == session.status %}selected{% endif %}>{{ s }}</option>
-            {% endfor %}
-          </select>
-        </form>
-        <form method="get" action="{{ url_for('channels.fork_channel', channel_id=channel.channel_id) if channel else '#' }}" class="inline">
-          <button type="submit" class="btn btn-sm" {% if not channel %}disabled{% endif %}>Fork</button>
-        </form>
-        <form method="post" action="{{ url_for('sessions.delete_session', session_id=session.session_id) }}" class="inline"
-              onsubmit="return confirm('Delete this session and all its messages? This cannot be undone.');">
-          <button type="submit" class="btn btn-sm btn-danger">Delete</button>
-        </form>
+      <form method="post" action="{{ url_for('sessions.update_title', session_id=session.session_id) }}"
+            id="title-form" class="inline" style="display:none; flex:1;">
+        <input type="text" name="title" value="{{ session.title or '' }}"
+               placeholder="Session name…" id="title-input"
+               style="flex:1; min-width:100px; padding:4px 8px; font-size:13px;">
+        <button type="submit" class="btn btn-sm" style="font-size:11px;">Save</button>
+        <button type="button" class="btn btn-sm" onclick="cancelEditTitle()" style="font-size:11px;">Cancel</button>
+      </form>
+      <div class="header-menu-container" style="position:relative;">
+        <button class="btn-icon" id="header-menu-btn" onclick="toggleHeaderMenu()" title="Session actions">⋮</button>
+        <div class="header-dropdown" id="header-dropdown" style="display:none;">
+          <div class="dropdown-item" onclick="editTitle()">✏️ Rename</div>
+          <div class="dropdown-item" onclick="showTurnsInput()">🔄 Turns: {{ session.max_auto_turns or 0 }}</div>
+          <div class="dropdown-divider"></div>
+          <div class="dropdown-item">
+            <form method="post" action="{{ url_for('sessions.update_status', session_id=session.session_id) }}" class="inline" style="display:flex; align-items:center; gap:6px; width:100%;">
+              <label style="font-size:12px; color:var(--ink-secondary);">Status:</label>
+              <select name="status" onchange="this.form.submit()" style="flex:1; font-size:12px; padding:4px 6px;">
+                {% for s in session_statuses %}
+                  <option value="{{ s }}" {% if s == session.status %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+              </select>
+            </form>
+          </div>
+          <div class="dropdown-divider"></div>
+          <div class="dropdown-item">
+            <form method="post" action="{{ url_for('sessions.update_max_auto_turns', session_id=session.session_id) }}" class="inline" style="display:flex; align-items:center; gap:6px; width:100%;">
+              <label style="font-size:12px; color:var(--ink-secondary);">Turns:</label>
+              <input type="number" name="max_auto_turns" value="{{ session.max_auto_turns or 0 }}" min="0" max="50" style="width:50px; font-size:12px; padding:2px 4px; text-align:center;">
+              <button type="submit" class="btn btn-sm" style="font-size:10px;">Set</button>
+            </form>
+          </div>
+          <div class="dropdown-divider"></div>
+          <div class="dropdown-item">
+            <a href="{{ url_for('sessions.session_config', session_id=session.session_id) }}" style="color:inherit; text-decoration:none; display:block;">⚙ Config</a>
+          </div>
+          <div class="dropdown-item">
+            <form method="get" action="{{ url_for('channels.fork_channel', channel_id=channel.channel_id) if channel else '#' }}" class="inline">
+              <button type="submit" class="btn-link" {% if not channel %}disabled{% endif %} style="all:unset; cursor:pointer; font:inherit; color:inherit; width:100%; text-align:left;">🔀 Fork</button>
+            </form>
+          </div>
+          <div class="dropdown-divider"></div>
+          <div class="dropdown-item dropdown-danger">
+            <form method="post" action="{{ url_for('sessions.delete_session', session_id=session.session_id) }}" class="inline"
+                  onsubmit="return confirm('Delete this session and all its messages? This cannot be undone.');">
+              <button type="submit" class="btn-link" style="all:unset; cursor:pointer; font:inherit; color:inherit; width:100%; text-align:left;">🗑 Delete</button>
+            </form>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -99,12 +158,18 @@
 
     {# Input #}
     <div class="chat-input-area">
-      <form method="post" action="{{ url_for('sessions.post_message', session_id=session.session_id) }}" class="chat-input-row">
-        <textarea name="body" placeholder="Type a message…" required></textarea>
-        <input type="hidden" name="user_id" value="web-user">
-        <input type="hidden" name="message_kind" value="conversation">
-        <button type="submit" class="btn btn-primary">Send</button>
-      </form>
+      <div class="chat-input-wrap" style="position:relative;">
+        <form method="post" action="{{ url_for('sessions.post_message', session_id=session.session_id) }}" class="chat-input-row" id="chat-form">
+          <textarea name="body" placeholder="Type a message… (use @ to mention an agent)" required
+                    id="chat-input"
+                    data-agent-names="{{ participants|map(attribute='agent_name')|list|join(',') }}"
+                    autocomplete="off"></textarea>
+          <input type="hidden" name="user_id" value="web-user">
+          <input type="hidden" name="message_kind" value="conversation">
+          <button type="submit" class="btn btn-primary" id="chat-send-btn">Send</button>
+        </form>
+        <div class="autocomplete-dropdown" id="autocomplete-dd" style="display:none;"></div>
+      </div>
     </div>
   </div>
 
@@ -248,18 +313,18 @@ function pollAgentStatus() {
       var stopBtn = document.getElementById('btn-stop-agent');
 
       if (agents.length === 0) {
+        // No agents tracked yet — keep polling, just hide the bar
         bar.style.display = 'none';
         stopBtn.style.display = 'none';
-        if (pollTimer) {
-          clearInterval(pollTimer);
-          pollTimer = null;
-        }
+        updateSidebarAgents([]);
         return;
       }
 
-      bar.style.display = 'block';
+      updateSidebarAgents(agents);
+
       var working = agents.filter(function(a) { return a.status === 'working'; });
       if (working.length > 0) {
+        bar.style.display = 'block';
         var w = working[0];
         var step = w.current_step;
         if (step) {
@@ -270,10 +335,14 @@ function pollAgentStatus() {
         stopBtn.style.display = 'inline-flex';
         stopBtn.dataset.agentName = w.agent_name;
       } else {
-        var done = agents.filter(function(a) { return a.status === 'completed' || a.status === 'error' || a.status === 'stopped'; });
-        if (done.length > 0) {
+        bar.style.display = 'none';
+        stopBtn.style.display = 'none';
+        // Only stop polling when ALL agents are done
+        var allDone = agents.every(function(a) {
+          return a.status === 'completed' || a.status === 'error' || a.status === 'stopped';
+        });
+        if (allDone && agents.length > 0) {
           detail.textContent = 'Done.';
-          stopBtn.style.display = 'none';
           if (pollTimer) {
             clearInterval(pollTimer);
             pollTimer = null;
@@ -282,6 +351,68 @@ function pollAgentStatus() {
       }
     })
     .catch(function() {});
+}
+
+function updateSidebarAgents(agents) {
+  if (!agents || agents.length === 0) {
+    return;
+  }
+  agents.forEach(function(a) {
+    var dot = document.getElementById('dot-' + a.agent_name);
+    var statusEl = document.getElementById('status-' + a.agent_name);
+    if (dot) {
+      if (a.status === 'working') dot.textContent = '🟡';
+      else if (a.status === 'completed' || a.status === 'idle') dot.textContent = '🟢';
+      else if (a.status === 'error') dot.textContent = '🔴';
+      else if (a.status === 'stopped') dot.textContent = '⏹️';
+      else dot.textContent = '⚪';
+    }
+    if (statusEl) {
+      var step = a.current_step;
+      if (a.status === 'working' && step) {
+        statusEl.textContent = step.tool_name + ' (#' + step.iteration + ')';
+      } else {
+        statusEl.textContent = a.status;
+      }
+    }
+  });
+}
+
+// ── Sidebar agent row click → show working bar ──────────────────
+function setupSidebarClicks() {
+  document.querySelectorAll('.sp-agent-row').forEach(function(row) {
+    row.addEventListener('click', function() {
+      var name = row.getAttribute('data-agent');
+      if (!name) return;
+      // Fetch the latest status for this agent and show it in the working bar
+      fetch('/sessions/' + sessionId + '/agent-status')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          var agents = data.agents || [];
+          var agent = agents.find(function(a) { return a.agent_name === name; });
+          if (!agent) return;
+          var bar = document.getElementById('agent-working-bar');
+          var detail = document.getElementById('agent-working-detail');
+          var stopBtn = document.getElementById('btn-stop-agent');
+          if (agent.status === 'working') {
+            bar.style.display = 'block';
+            var step = agent.current_step;
+            if (step) {
+              detail.textContent = agent.agent_name + ' — ' + step.tool_name + ' (#' + step.iteration + ')';
+            } else {
+              detail.textContent = agent.agent_name + ' — waiting for LLM…';
+            }
+            stopBtn.style.display = 'inline-flex';
+            stopBtn.dataset.agentName = agent.agent_name;
+          } else {
+            detail.textContent = agent.agent_name + ' — ' + agent.status;
+            bar.style.display = 'block';
+            stopBtn.style.display = 'none';
+          }
+        })
+        .catch(function() {});
+    });
+  });
 }
 
 function stopAgent() {
@@ -304,6 +435,268 @@ function stopAgent() {
 // Start polling when page loads
 document.addEventListener('DOMContentLoaded', function() {
   pollTimer = setInterval(pollAgentStatus, 1000);
+  setupAutocomplete();
+  setupChatForm();
+  setupEnterKey();
+  setupSidebarClicks();
+  // Auto-scroll to bottom on page load
+  scrollToBottom();
 });
+
+// ── Chat auto-scroll ──────────────────────────────────────────────
+var _scrollingUp = false;
+var _scrollCheckTimer = null;
+
+function scrollToBottom() {
+  var thread = document.getElementById('message-thread');
+  if (!thread) return;
+  thread.scrollTop = thread.scrollHeight;
+}
+
+function userIsNearBottom() {
+  var thread = document.getElementById('message-thread');
+  if (!thread) return true;
+  var threshold = 80; // px from bottom
+  return (thread.scrollHeight - thread.scrollTop - thread.clientHeight) < threshold;
+}
+
+// Track user scrolling — if they scroll up, stop auto-scrolling
+// until they scroll back down or a new message arrives
+(function() {
+  var thread = document.getElementById('message-thread');
+  if (!thread) return;
+  thread.addEventListener('scroll', function() {
+    if (_scrollCheckTimer) return; // already tracking
+    if (userIsNearBottom()) return; // user is reading old messages
+    // User scrolled up — pause auto-scroll
+    _scrollingUp = true;
+    // Resume auto-scroll after 3s of no scrolling (user probably finished reading)
+    _scrollCheckTimer = setTimeout(function() {
+      _scrollingUp = false;
+      _scrollCheckTimer = null;
+    }, 3000);
+  });
+})();
+
+// Override scrollToBottom to be user-aware
+var _origScrollToBottom = scrollToBottom;
+scrollToBottom = function() {
+  if (_scrollingUp && !userIsNearBottom()) return;
+  _origScrollToBottom();
+};
+
+// ── @Autocomplete ────────────────────────────────────────────────
+var acAgents = [];
+var acSelectedIndex = -1;
+
+function setupAutocomplete() {
+  var input = document.getElementById('chat-input');
+  if (!input) return;
+  var raw = input.getAttribute('data-agent-names') || '';
+  acAgents = raw ? raw.split(',').filter(function(n) { return n.trim(); }) : [];
+  if (acAgents.length === 0) return;
+
+  input.addEventListener('input', function() { onAcInput(input); });
+  input.addEventListener('keydown', function(e) { onAcKeydown(input, e); });
+  input.addEventListener('blur', function() { setTimeout(function() { hideAc(); }, 200); });
+  input.addEventListener('focus', function() { if (getAcQuery(input) !== null) showAc(input); });
+}
+
+function getAcQuery(input) {
+  var pos = input.selectionStart;
+  var text = input.value.substring(0, pos);
+  var m = text.match(/(?:^|\s)@(\w*)$/);
+  return m ? m[1] : null;
+}
+
+function onAcInput(input) {
+  var query = getAcQuery(input);
+  if (query === null) { hideAc(); return; }
+  showAc(input, query);
+}
+
+function onAcKeydown(input, e) {
+  var dd = document.getElementById('autocomplete-dd');
+  if (dd.style.display === 'none') return;
+  var items = dd.querySelectorAll('.ac-item');
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    acSelectedIndex = Math.min(acSelectedIndex + 1, items.length - 1);
+    updateAcSelection(items);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    acSelectedIndex = Math.max(acSelectedIndex - 1, 0);
+    updateAcSelection(items);
+  } else if (e.key === 'Enter' || e.key === 'Tab') {
+    if (acSelectedIndex >= 0 && items[acSelectedIndex]) {
+      e.preventDefault();
+      var nameSpan = items[acSelectedIndex].querySelector('span:first-child');
+      var name = nameSpan ? nameSpan.textContent.trim().replace(/^@/, '') : '';
+      insertAc(input, name);
+    }
+  }
+}
+
+function updateAcSelection(items) {
+  for (var i = 0; i < items.length; i++) {
+    items[i].classList.toggle('selected', i === acSelectedIndex);
+  }
+  if (acSelectedIndex >= 0 && items[acSelectedIndex]) {
+    items[acSelectedIndex].scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function showAc(input, query) {
+  query = (query || '').toLowerCase();
+  var dd = document.getElementById('autocomplete-dd');
+  var matched = [];
+  for (var i = 0; i < acAgents.length; i++) {
+    var name = acAgents[i].trim();
+    if (name.toLowerCase().indexOf(query) === 0) {
+      matched.push(name);
+    }
+  }
+  if (matched.length === 0) { dd.style.display = 'none'; return; }
+
+  var html = '';
+  for (var i = 0; i < matched.length; i++) {
+    html += '<div class="ac-item" onmousedown="event.preventDefault(); insertAcFromClick(this)">'
+         + '<span>@' + matched[i] + '</span>'
+         + '<span class="ac-badge">agent</span>'
+         + '</div>';
+  }
+  dd.innerHTML = html;
+  dd.style.display = 'block';
+  acSelectedIndex = -1;
+}
+
+function hideAc() {
+  document.getElementById('autocomplete-dd').style.display = 'none';
+}
+
+function insertAc(input, name) {
+  var pos = input.selectionStart;
+  var text = input.value;
+  var before = text.substring(0, pos);
+  var after = text.substring(pos);
+  var m = before.match(/((?:^|\s)@)\w*$/);
+  if (!m) return;
+  var atStart = m.index + m[1].length;
+  var newBefore = before.substring(0, atStart) + name;
+  input.value = newBefore + ' ' + after;
+  input.selectionStart = input.selectionEnd = newBefore.length + 1;
+  input.focus();
+  hideAc();
+}
+
+function insertAcFromClick(el) {
+  var input = document.getElementById('chat-input');
+  var nameSpan = el.querySelector('span:first-child');
+  var name = nameSpan ? nameSpan.textContent.trim().replace(/^@/, '') : '';
+  insertAc(input, name);
+}
+
+// ── Enter sends, Shift+Enter newline ──────────────────────────────
+function setupEnterKey() {
+  var input = document.getElementById('chat-input');
+  if (!input) return;
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      // Don't intercept if autocomplete is open
+      var dd = document.getElementById('autocomplete-dd');
+      if (dd && dd.style.display !== 'none') return;
+      e.preventDefault();
+      document.getElementById('chat-form').requestSubmit();
+    }
+  });
+}
+
+// ── AJAX form submit ──────────────────────────────────────────────
+function setupChatForm() {
+  var form = document.getElementById('chat-form');
+  if (!form) return;
+  form.addEventListener('submit', function(e) {
+    e.preventDefault();
+    var btn = document.getElementById('chat-send-btn');
+    var textarea = document.getElementById('chat-input');
+    var body = textarea.value.trim();
+    if (!body) return;
+    btn.disabled = true;
+    btn.textContent = '…';
+    fetch(form.action, {
+      method: 'POST',
+      body: new FormData(form),
+      redirect: 'manual',
+      headers: { 'X-Requested-With': 'fetch' },
+    }).then(function() {
+      textarea.value = '';
+      textarea.focus();
+      btn.disabled = false;
+      btn.textContent = 'Send';
+      scrollToBottom();
+    }).catch(function() {
+      btn.disabled = false;
+      btn.textContent = 'Send';
+    });
+  });
+}
+
+// ── Header dropdown ──────────────────────────────────────────────
+function toggleHeaderMenu() {
+  var dd = document.getElementById('header-dropdown');
+  dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+}
+
+document.addEventListener('click', function(e) {
+  var dd = document.getElementById('header-dropdown');
+  var btn = document.getElementById('header-menu-btn');
+  if (dd && btn && !dd.contains(e.target) && !btn.contains(e.target)) {
+    dd.style.display = 'none';
+  }
+});
+
+// ── Inline title editing ─────────────────────────────────────────
+function editTitle() {
+  document.getElementById('header-dropdown').style.display = 'none';
+  document.getElementById('session-title-display').style.display = 'none';
+  document.getElementById('title-form').style.display = 'flex';
+  document.getElementById('title-input').focus();
+  document.getElementById('title-input').select();
+}
+
+function cancelEditTitle() {
+  document.getElementById('session-title-display').style.display = 'block';
+  document.getElementById('title-form').style.display = 'none';
+}
+
+function showTurnsInput() {
+  document.getElementById('header-dropdown').style.display = 'none';
+}
+
+// ── Left Sidebar ─────────────────────────────────────────────────
+function toggleSidePanel() {
+  var panel = document.getElementById('side-panel-left');
+  var btn = document.getElementById('side-toggle-btn');
+  panel.classList.toggle('open');
+  btn.textContent = panel.classList.contains('open') ? '◀' : '▶';
+}
+
+function stopAllAgents() {
+  var rows = document.querySelectorAll('.sp-agent-row');
+  rows.forEach(function(row) {
+    var name = row.getAttribute('data-agent');
+    if (!name) return;
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/sessions/' + sessionId + '/stop-agent';
+    var input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'agent_name';
+    input.value = name;
+    form.appendChild(input);
+    document.body.appendChild(form);
+    form.submit();
+  });
+}
 </script>
 {% endblock %}

@@ -60,7 +60,9 @@
         if (existing) return;
       }
       list.insertAdjacentHTML('beforeend', payload.html);
-      if (thread) thread.scrollTop = thread.scrollHeight;
+      if (thread && (typeof userIsNearBottom !== 'function' || userIsNearBottom())) {
+        thread.scrollTop = thread.scrollHeight;
+      }
     }
     if (payload && typeof payload.created_at === 'number') {
       after = Math.max(after, payload.created_at);

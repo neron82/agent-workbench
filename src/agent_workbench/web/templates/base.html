@@ -741,6 +741,179 @@
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
     ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
 
+    /* ── Header Dropdown ── */
+    .header-dropdown {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      min-width: 200px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      z-index: 200;
+      padding: 4px;
+    }
+    .header-dropdown .dropdown-item {
+      padding: 8px 12px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      color: var(--ink);
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .header-dropdown .dropdown-item:hover {
+      background: var(--panel-hover);
+    }
+    .header-dropdown .dropdown-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 4px 8px;
+    }
+    .header-dropdown .dropdown-danger:hover {
+      background: var(--danger-bg);
+    }
+    .header-dropdown .dropdown-danger .btn-link {
+      color: var(--danger) !important;
+    }
+
+    /* ── Left Sidebar ── */
+    .side-panel-left {
+      width: 0;
+      overflow: hidden;
+      background: var(--bg-secondary);
+      border-right: 1px solid var(--border);
+      transition: width 0.2s ease;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .side-panel-left.open {
+      width: 220px;
+    }
+    .side-panel-toggle {
+      position: absolute;
+      top: 50%;
+      left: 0;
+      width: 24px;
+      height: 96px;
+      margin-top: -48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-left: none;
+      border-radius: 0 6px 6px 0;
+      cursor: pointer;
+      color: var(--ink-secondary);
+      font-size: 12px;
+      z-index: 50;
+      transition: left 0.2s ease, color 0.15s;
+    }
+    .side-panel-toggle:hover { color: var(--accent); }
+    .side-panel-left.open ~ .side-panel-toggle {
+      left: 220px;
+    }
+    .side-panel-body {
+      padding: 16px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .sp-section {
+      margin-bottom: 16px;
+    }
+    .sp-section h4 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--ink-muted);
+      margin-bottom: 8px;
+    }
+    .sp-agent-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 4px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+    }
+    .sp-agent-row:hover {
+      background: var(--panel);
+    }
+    .sp-agent-dot {
+      font-size: 10px;
+      width: 14px;
+      text-align: center;
+    }
+    .sp-agent-name {
+      flex: 1;
+      font-weight: 500;
+    }
+    .sp-agent-status {
+      font-size: 10px;
+      color: var(--ink-muted);
+    }
+    .sp-stat-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 0;
+      font-size: 13px;
+    }
+    .sp-stat-label {
+      color: var(--ink-secondary);
+      width: 60px;
+      flex-shrink: 0;
+    }
+    .sp-stat-value {
+      font-weight: 500;
+    }
+    .sp-muted {
+      font-size: 12px;
+      color: var(--ink-muted);
+      padding: 4px 0;
+    }
+
+    /* ── @Autocomplete Dropdown ── */
+    .autocomplete-dropdown {
+      position: absolute;
+      bottom: 100%;
+      left: 0;
+      right: 0;
+      max-height: 160px;
+      overflow-y: auto;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 -4px 16px rgba(0,0,0,0.3);
+      z-index: 200;
+      padding: 4px;
+      margin-bottom: 4px;
+    }
+    .autocomplete-dropdown .ac-item {
+      padding: 6px 10px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--ink);
+    }
+    .autocomplete-dropdown .ac-item:hover,
+    .autocomplete-dropdown .ac-item.selected {
+      background: var(--accent-bg);
+    }
+    .autocomplete-dropdown .ac-item .ac-badge {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: var(--bg-secondary);
+      color: var(--ink-secondary);
+      margin-left: auto;
+    }
+
     /* ── Empty State ── */
     .empty-state {
       text-align: center;

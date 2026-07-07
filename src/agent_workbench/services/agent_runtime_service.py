@@ -136,6 +136,9 @@ class AgentRuntimeService:
                     session_policy=session_policy,
                     channel=channel,
                 )
+                if not reply:
+                    # Agent was stopped or produced no output — skip posting
+                    continue
                 payload = json.dumps(
                     {
                         "envelope": "agent_reply",
@@ -220,6 +223,9 @@ class AgentRuntimeService:
                         session_policy=session_policy,
                         channel=channel,
                     )
+                    if not reply:
+                        # Agent was stopped — skip posting
+                        break
                     payload = json.dumps(
                         {
                             "envelope": "agent_reply",
@@ -432,7 +438,25 @@ class AgentRuntimeService:
         try:
             while iterations < max_iter:
                 if tracker.should_stop(session.session_id, agent_name):
-                    final_text = "[agent stopped by user]"
+                    # Post a system message so the UI shows the stop clearly
+                    if channel is not None:
+                        stop_payload = json.dumps({
+                            "envelope": "system_notice",
+                            "body": f"Agent {agent_name} was stopped by user.",
+                            "from": "system",
+                        })
+                        self.routing.route_message(
+                            workspace_id=session.workspace_id,
+                            channel_id=channel["channel_id"],
+                            source_type="system",
+                            source_id="agent-runtime",
+                            target_type="all",
+                            target_id="@all",
+                            message_kind="system",
+                            session_id=session.session_id,
+                            payload_ref=stop_payload,
+                        )
+                    final_text = ""
                     break
                 iterations += 1
                 data = self._post_chat_completions(url, base_payload, headers, timeout)
@@ -511,7 +535,7 @@ class AgentRuntimeService:
             )
             raise
         finally:
-            if not final_text:
+            if not final_text and iterations > 0:
                 final_text = (
                     f"[agent stopped after {iterations} tool iteration(s) "
                     f"without producing a final reply]"
@@ -591,7 +615,16 @@ class AgentRuntimeService:
             err_body = exc.read().decode("utf-8", errors="replace")
             raise AgentRuntimeError(f"HTTP {exc.code}: {err_body}") from exc
         except urllib.error.URLError as exc:
-            raise AgentRuntimeError(str(exc.reason)) from exc
+            reason = str(exc.reason)
+            if "timed out" in reason.lower():
+                raise AgentRuntimeError(
+                    f"LLM antwortete nicht innerhalb von {timeout:.0f}s (Timeout). "
+                    f"Das Modell braucht möglicherweise länger für diese Anfrage. "
+                    f"Erhöhe timeout_seconds im Provider oder verkürze die Eingabe."
+                ) from exc
+            raise AgentRuntimeError(
+                f"Verbindung zum LLM-Endpunkt fehlgeschlagen: {reason}"
+            ) from exc
 
 
 def launch_agent_responses_async(

@@ -128,13 +128,18 @@ class AgentStatusTracker:
         agent_name: str,
         error: Optional[str] = None,
     ) -> None:
-        """Mark an agent as done."""
+        """Mark an agent as done.
+
+        Preserves an existing 'stopped' status so the UI can distinguish
+        user-initiated stops from normal completion.
+        """
         key = self._key(session_id, agent_name)
         with self._data_lock:
             status = self._status.get(key)
             if status is None:
                 return
-            status.status = "error" if error else "completed"
+            if status.status != "stopped":
+                status.status = "error" if error else "completed"
             status.error = error
             status.completed_at = time.time()
             status.current_step = None

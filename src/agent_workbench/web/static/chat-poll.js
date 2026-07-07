@@ -39,7 +39,11 @@
       }
       const thread = document.getElementById('message-thread');
       if (thread && payload.html) {
-        thread.scrollTop = thread.scrollHeight;
+        if (typeof userIsNearBottom === 'function' && !userIsNearBottom()) {
+          // User is reading — don't scroll
+        } else {
+          thread.scrollTop = thread.scrollHeight;
+        }
       }
     } catch (_err) {
       // Quiet retry on next interval. A chat poller should not scream.
