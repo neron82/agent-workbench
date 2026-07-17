@@ -29,7 +29,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-from flask import Flask, g, jsonify, render_template
+from flask import Flask, g, jsonify, render_template, request, session as flask_session
 
 from agent_workbench.db import apply_migrations, get_connection
 from agent_workbench.services.agent_runtime_service import extract_message_body
@@ -40,6 +40,7 @@ from agent_workbench.services.provider_service import ProviderService
 from agent_workbench.services.role_service import RoleService
 from agent_workbench.services.routing_service import RoutingService
 from agent_workbench.services.session_service import SessionService
+from agent_workbench.models.workspace import WorkspaceRepository
 
 
 # Default DB path: ``workbench.db`` at the project root, matching the
@@ -177,12 +178,19 @@ def create_app(
         "WORKBENCH_AGENT_RESPONSE_MODE", "async"
     )
 
-    # In production, lock down cookie / session defaults so that
-    # ``flash()`` and any future server-side session use cannot be
-    # downgraded by a misconfigured reverse proxy. Tests and dev
-    # intentionally keep Flask's lax defaults.
+    # Apply SESSION_COOKIE_SAMESITE='Lax' in all environments to prevent
+    # CSRF via cross-site form submissions.  In production we also enable
+    # Secure and HttpOnly; in dev/testing we keep HttpOnly but allow
+    # plain HTTP so local development works without TLS.
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
     if env == "production":
         _apply_production_cookie_defaults(app)
+
+    # Reject unsafe requests before opening the database or creating a
+    # browser identity.  CSRF failures must be side-effect free.
+    from agent_workbench.web.csrf import init_csrf
+    init_csrf(app)
 
     # Seed builtin tools once at factory time (idempotent).
     # Open a temporary connection for the seed; the per-request hook
@@ -209,10 +217,23 @@ def create_app(
         shared = app.config.get("WORKBENCH_DB_CONN")
         if shared is not None:
             g.db = shared
-            return
-        conn = get_connection(app.config["WORKBENCH_DB_PATH"])
-        apply_migrations(conn)
-        g.db = conn
+        else:
+            conn = get_connection(app.config["WORKBENCH_DB_PATH"])
+            apply_migrations(conn)
+            g.db = conn
+
+        # A browser-local identity replaces the old hard-coded "web-user"
+        # source id.  Health probes stay cheap and do not create identities.
+        if request.path not in {"/healthz", "/readyz"}:
+            from agent_workbench.services.identity_service import IdentityService
+            identity = IdentityService(g.db)
+            current_id = flask_session.get("workbench_user_id")
+            user = identity.get_or_create_user(
+                current_id,
+                display_name="You" if not current_id else "",
+            )
+            flask_session["workbench_user_id"] = user.user_id
+            g.current_user = user
 
     @app.teardown_request
     def _close_db_connection(_exc: Optional[BaseException]) -> None:
@@ -299,7 +320,56 @@ def create_app(
 
     app.add_template_global(extract_message_body, name="message_body")
 
-    # --- Chat UX bubble helpers ---------------------------------------
+    @app.context_processor
+    def _identity_template_context():
+        user = getattr(g, "current_user", None)
+        return {
+            "current_user": user,
+            "current_user_display": getattr(user, "display_name", "") if user else "",
+        }
+
+    @app.context_processor
+    def _workspace_template_context():
+        repo = WorkspaceRepository(get_db())
+        workspaces = repo.list_all()
+        view_args = request.view_args or {}
+        requested_id = view_args.get("workspace_id")
+
+        # Resource pages derive workspace context from the resource itself.
+        # The browser cookie is merely a landing-page preference and must not
+        # make a session opened in another tab look like it belongs elsewhere.
+        if requested_id is None and view_args.get("session_id"):
+            row = get_db().execute(
+                "SELECT workspace_id FROM session_extensions WHERE session_id = ?",
+                (view_args["session_id"],),
+            ).fetchone()
+            requested_id = row["workspace_id"] if row else None
+        if requested_id is None and view_args.get("channel_id"):
+            row = get_db().execute(
+                "SELECT workspace_id FROM channels WHERE channel_id = ?",
+                (view_args["channel_id"],),
+            ).fetchone()
+            requested_id = row["workspace_id"] if row else None
+        if requested_id is None and view_args.get("harness_run_id"):
+            row = get_db().execute(
+                "SELECT workspace_id FROM harness_runs WHERE harness_run_id = ?",
+                (view_args["harness_run_id"],),
+            ).fetchone()
+            requested_id = row["workspace_id"] if row else None
+        requested_id = (
+            requested_id
+            or request.args.get("workspace_id")
+            or flask_session.get("workbench_workspace_id")
+        )
+        current = repo.get_by_id(requested_id) if requested_id else None
+        if current is None and workspaces:
+            current = next((ws for ws in workspaces if ws.is_default), workspaces[0])
+        return {
+            "workspaces": workspaces,
+            "current_workspace": current,
+            "current_workspace_id": current.workspace_id if current else None,
+        }
+
     # These helpers are used by message_row.html to translate a
     # ``RoutedMessage`` into a user-facing role/avatar/display-name. They
     # are exposed as Jinja globals so any template can use them.
@@ -338,7 +408,6 @@ def create_app(
     app.add_template_filter(_datetime_filter, name="datetime")
 
     # Register blueprints.
-    from agent_workbench.web.forks import forks_bp
     from agent_workbench.web.reviews import reviews_bp
     from agent_workbench.web.permissions import permissions_bp
     from agent_workbench.web.task_specs import bp as task_specs_bp
@@ -347,8 +416,9 @@ def create_app(
     from agent_workbench.web.sessions import bp as sessions_bp
     from agent_workbench.web.messages import bp as messages_bp
     from agent_workbench.web.settings import bp as settings_bp
+    from agent_workbench.web.identity import bp as identity_bp
+    from agent_workbench.web.assets import bp as assets_bp
 
-    app.register_blueprint(forks_bp)
     app.register_blueprint(reviews_bp)
     app.register_blueprint(permissions_bp)
     app.register_blueprint(task_specs_bp)
@@ -357,10 +427,12 @@ def create_app(
     app.register_blueprint(sessions_bp)
     app.register_blueprint(messages_bp)
     app.register_blueprint(settings_bp)
+    app.register_blueprint(identity_bp)
+    app.register_blueprint(assets_bp)
 
     # Friendly 404.
     @app.errorhandler(404)
-    def _not_found(_e: Exception) -> str:
+    def _not_found(_e: Exception) -> tuple[str, int]:
         return render_template("error.html", message="Not found"), 404
 
     return app

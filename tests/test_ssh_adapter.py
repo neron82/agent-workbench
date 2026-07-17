@@ -11,7 +11,6 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from agent_workbench.adapters.ssh import SshAdapter
-from agent_workbench.adapters.base import AdapterCapabilities
 from agent_workbench.models.workspace import WorkspaceRepository
 
 

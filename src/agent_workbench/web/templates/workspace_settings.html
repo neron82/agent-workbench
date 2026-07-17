@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}{{ workspace.name }} Settings — Agent Workbench{% endblock %}
+{% block content %}
+<div class="settings-page">
+  <div class="eyebrow">Workspace settings</div>
+  <h1>{{ workspace.name }}</h1>
+  <p class="muted">Rename this project or inspect its current scope. Deletion is intentionally blocked while it still contains channels or sessions.</p>
+
+  <section class="card">
+    <h2>Project name</h2>
+    <form method="post" action="{{ url_for('channels.rename_workspace', workspace_id=workspace.workspace_id) }}" class="form-row">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label class="sr-only" for="workspace-name">Workspace name</label>
+      <input id="workspace-name" type="text" name="name" value="{{ workspace.name }}" maxlength="120" required>
+      <button class="btn btn-primary" type="submit">Save name</button>
+    </form>
+  </section>
+
+  <section class="card" id="workspace-teams">
+    <div class="section-heading-row">
+      <div>
+        <div class="eyebrow">Reusable groups</div>
+        <h2>Agent teams</h2>
+      </div>
+    </div>
+    <p class="muted">Teams belong only to this workspace. Apply one inside a session to add its agents together.</p>
+    <form method="post" action="{{ url_for('channels.create_team', workspace_id=workspace.workspace_id) }}" class="team-create-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label><span>Name</span><input type="text" name="name" maxlength="120" placeholder="Research crew" required></label>
+      <label><span>Description</span><input type="text" name="description" maxlength="300" placeholder="Read-only investigators and synthesiser"></label>
+      <button class="btn btn-primary" type="submit">Create team</button>
+    </form>
+
+    {% if teams %}
+      <div class="team-grid">
+      {% for team in teams %}
+        <article class="team-card" data-team-id="{{ team.team_id }}">
+          <div class="team-card-header">
+            <div><strong>{{ team.name }}</strong>{% if team.description %}<p class="muted">{{ team.description }}</p>{% endif %}</div>
+            <form method="post" action="{{ url_for('channels.delete_team', workspace_id=workspace.workspace_id, team_id=team.team_id) }}" onsubmit="return confirm('Delete this reusable team? Sessions keep their current participants.');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn-icon" type="submit" aria-label="Delete {{ team.name }}">×</button>
+            </form>
+          </div>
+          <ul class="team-member-list">
+          {% for member in team_members.get(team.team_id, []) %}
+            <li>
+              <span><strong>{{ member.agent_name }}</strong><small>{{ member.role_label or 'member' }}</small></span>
+              <form method="post" action="{{ url_for('channels.remove_team_member', workspace_id=workspace.workspace_id, team_id=team.team_id, member_id=member.member_id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn-icon" type="submit" aria-label="Remove {{ member.agent_name }}">×</button>
+              </form>
+            </li>
+          {% else %}
+            <li class="muted">No agents yet.</li>
+          {% endfor %}
+          </ul>
+          <form method="post" action="{{ url_for('channels.add_team_member', workspace_id=workspace.workspace_id, team_id=team.team_id) }}" class="team-member-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label><span>Agent</span><select name="agent_profile_id" required>
+                <option value="">Choose agent…</option>
+                {% for profile in available_agents %}<option value="{{ profile.agent_profile_id }}">{{ profile.name }}</option>{% endfor %}
+            </select></label>
+            <label><span>Team role</span><input type="text" name="role_label" value="member" maxlength="80"></label>
+            <label><span>Order</span><input type="number" name="sort_order" value="0" min="0" max="999"></label>
+            <button class="btn btn-sm" type="submit">Add</button>
+          </form>
+        </article>
+      {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-state compact"><p>No reusable teams in this workspace yet.</p></div>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Other workspaces</h2>
+    {% if workspaces %}
+      <ul class="session-list">
+      {% for ws in workspaces %}
+        <li>
+          <span class="workspace-dot{% if ws.workspace_id == workspace.workspace_id %} current{% endif %}"></span>
+          <div class="session-info"><strong>{{ ws.name }}</strong><div class="session-meta">{{ ws.workspace_id[:12] }}…</div></div>
+          <a class="btn btn-sm" href="{{ url_for('channels.index', workspace_id=ws.workspace_id) }}">Open</a>
+        </li>
+      {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No workspaces yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="card danger-zone">
+    <h2>Delete workspace</h2>
+    <p class="muted">Only empty workspaces can be deleted. Archive or move their sessions first.</p>
+    <form method="post" action="{{ url_for('channels.delete_workspace', workspace_id=workspace.workspace_id) }}" onsubmit="return confirm('Delete this empty workspace?');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-danger" type="submit">Delete workspace</button>
+    </form>
+  </section>
+</div>
+{% endblock %}

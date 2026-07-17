@@ -16,6 +16,7 @@ buggy agent cannot run away.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -36,16 +37,39 @@ from agent_workbench.services.participant_service import ParticipantService
 from agent_workbench.services.routing_service import RoutingService
 from agent_workbench.services.secret_store import get_secrets_file, resolve_secret
 from agent_workbench.services.tool_dispatcher import ToolDispatcher
-from agent_workbench.services.tool_registry import (
-    DEFAULT_SESSION_POLICIES,
-    ToolRegistry,
-)
+from agent_workbench.services.tool_registry import ToolRegistry
 
 
 # Hard cap on tool-calling iterations per agent reply.  A buggy or
 # malicious agent cannot run forever — once we hit this, we surface
 # the partial transcript as the reply.
 MAX_TOOL_ITERATIONS = 5
+
+# Session-scoped lock to prevent overlapping generate_for_session
+# calls for the same session.  Uses a nonblocking/bounded approach:
+# a second concurrent call for the same session is denied immediately.
+_session_locks: Dict[str, threading.Lock] = {}
+_session_locks_lock = threading.Lock()
+
+
+def _get_session_lock(session_id: str) -> threading.Lock:
+    """Get or create a nonblocking lock for a session."""
+    with _session_locks_lock:
+        if session_id not in _session_locks:
+            _session_locks[session_id] = threading.Lock()
+        return _session_locks[session_id]
+
+
+def _get_max_concurrent_workers() -> int:
+    """Return the max concurrent worker threads per generate_for_session.
+
+    Configurable via ``WORKBENCH_MAX_CONCURRENT_WORKERS`` env var.
+    Defaults to 3.
+    """
+    try:
+        return max(1, int(os.environ.get("WORKBENCH_MAX_CONCURRENT_WORKERS", "3")))
+    except (ValueError, TypeError):
+        return 3
 
 
 class AgentRuntimeError(RuntimeError):
@@ -83,6 +107,36 @@ class AgentRuntimeService:
         user_body: str,
         user_id: str,
         target_agent_name: Optional[str] = None,
+        target_agent_names: Optional[Sequence[str]] = None,
+    ) -> None:
+        # Acquire a nonblocking session-scoped lock.  If another
+        # generate_for_session is already running for this session,
+        # fail immediately — never interleave.
+        lock = _get_session_lock(session_id)
+        if not lock.acquire(blocking=False):
+            raise AgentRuntimeError(
+                f"Session {session_id!r} already has a generate_for_session "
+                f"in progress; concurrent calls are not allowed"
+            )
+        try:
+            self._generate_for_session_impl(
+                session_id=session_id,
+                user_body=user_body,
+                user_id=user_id,
+                target_agent_name=target_agent_name,
+                target_agent_names=target_agent_names,
+            )
+        finally:
+            lock.release()
+
+    def _generate_for_session_impl(
+        self,
+        *,
+        session_id: str,
+        user_body: str,
+        user_id: str,
+        target_agent_name: Optional[str] = None,
+        target_agent_names: Optional[Sequence[str]] = None,
     ) -> None:
         session = self.sessions.get_by_id(session_id)
         if session is None:
@@ -93,14 +147,28 @@ class AgentRuntimeService:
 
         details = self.participants.list_active_participant_details(session_id)
 
-        # Filter to a specific agent if @agent_name was used
-        if target_agent_name:
+        requested_targets = list(target_agent_names or [])
+        if target_agent_name and not requested_targets:
+            requested_targets = [target_agent_name]
+        requested_by_key = {
+            name.strip().lower(): name.strip()
+            for name in requested_targets
+            if name and name.strip()
+        }
+
+        # Filter to one or several explicitly selected agents.
+        if requested_by_key:
             filtered = [
                 d for d in details
-                if d["agent_name"].lower() == target_agent_name.lower()
+                if d["agent_name"].lower() in requested_by_key
             ]
-            if not filtered:
-                error_msg = f"Agent {target_agent_name!r} not found in this session"
+            found = {d["agent_name"].lower() for d in filtered}
+            missing = [requested_by_key[key] for key in requested_by_key if key not in found]
+            if missing:
+                error_msg = (
+                    "Agent target(s) not found in this session: "
+                    + ", ".join(missing)
+                )
                 payload = json.dumps({
                     "envelope": "agent_error",
                     "body": error_msg,
@@ -120,54 +188,99 @@ class AgentRuntimeService:
                 return
             details = filtered
 
+        # Build a shared history snapshot that each worker will copy.
         history = self._build_history(session_id)
-        session_type = session.session_type or "chat"
-        session_policy = DEFAULT_SESSION_POLICIES.get(
-            session_type, ["read_only"]
-        )
+
+        # Register every active participant in the status tracker so
+        # the status JSON always shows them (idle / queued / working /
+        # completed / error / stopped).
+        tracker = AgentStatusTracker.get_instance()
+        for detail in details:
+            tracker.init_agent(session_id, detail["agent_name"])
+
+        # Extract the DB path from this connection so each worker can
+        # open its own fresh connection.
+        db_path = self.conn.execute("PRAGMA database_list").fetchone()[2]
+        if not db_path:
+            raise AgentRuntimeError("Cannot determine database path from connection")
+        db_path = os.path.abspath(db_path)
+
+        # Session labels are descriptive; no explicit session-level permission
+        # policy is configured here. Profile allow/deny hints and negotiated
+        # tool names remain authoritative gates.
+        # ``None`` is the only unspecified/permissive policy sentinel.
+        # An explicit ``[]`` denies all permission classes.
+        # Runtime with no explicit session-level policy passes ``None``.
+        session_policy: Optional[List[str]] = None
+
+        # Queue all agents, then launch workers with a concurrency cap.
+        results: List[Dict[str, Any]] = []
+        results_lock = threading.Lock()
+        errors: List[Dict[str, Any]] = []
+        errors_lock = threading.Lock()
+        barrier = threading.Barrier(len(details) + 1, timeout=120)
+        concurrency_sem = threading.Semaphore(_get_max_concurrent_workers())
 
         for detail in details:
+            tracker.queue_agent(session_id, detail["agent_name"])
+
+        for detail in details:
+            concurrency_sem.acquire()
+            worker = threading.Thread(
+                target=self._run_worker,
+                args=(
+                    db_path, session_id, detail, user_body, copy.deepcopy(history),
+                    session.workspace_id, channel["channel_id"],
+                    getattr(session, "session_type", "chat"),
+                    session_policy,
+                    results, results_lock,
+                    errors, errors_lock,
+                    barrier,
+                    concurrency_sem,
+                ),
+                daemon=True,
+                name=f"aw-{session_id[:8]}-{detail['agent_name'][:8]}",
+            )
+            worker.start()
+
+        # Wait for all workers to finish (or timeout).
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            pass  # Some workers may have errored, but barrier is broken
+
+        # Route all successful replies.
+        for r in results:
+            payload = json.dumps({
+                "envelope": "agent_reply",
+                "body": r["reply"],
+                "from": r["agent_name"],
+                "binding_id": r["binding_id"],
+                "agent_profile_id": r["agent_profile_id"],
+            })
             try:
-                reply = self._generate_reply(
-                    detail,
-                    user_body=user_body,
-                    history=history,
-                    session=session,
-                    session_policy=session_policy,
-                    channel=channel,
-                )
-                if not reply:
-                    # Agent was stopped or produced no output — skip posting
-                    continue
-                payload = json.dumps(
-                    {
-                        "envelope": "agent_reply",
-                        "body": reply,
-                        "from": detail["agent_name"],
-                        "binding_id": detail["binding_id"],
-                        "agent_profile_id": detail["agent_profile_id"],
-                    }
-                )
                 self.routing.route_message(
                     workspace_id=session.workspace_id,
                     channel_id=channel["channel_id"],
                     source_type="agent",
-                    source_id=detail["agent_name"],
+                    source_id=r["agent_name"],
                     target_type="all",
                     target_id="@all",
                     message_kind="conversation",
                     session_id=session_id,
                     payload_ref=payload,
                 )
-                history.append({"role": "assistant", "content": reply})
-            except Exception as exc:  # pragma: no cover - defensive path exercised via UI smoke
-                payload = json.dumps(
-                    {
-                        "envelope": "agent_error",
-                        "body": f"{detail['agent_name']} konnte nicht antworten: {exc}",
-                        "from": "system",
-                    }
-                )
+            except Exception:
+                pass  # Best-effort routing; one failure doesn't stop others
+
+        # Route all error messages.
+        for e in errors:
+            payload = json.dumps({
+                "envelope": "agent_error",
+                "body": f"{e['agent_name']} could not respond: {e['error']}",
+                "from": "system",
+            })
+            try:
                 self.routing.route_message(
                     workspace_id=session.workspace_id,
                     channel_id=channel["channel_id"],
@@ -179,20 +292,25 @@ class AgentRuntimeService:
                     session_id=session_id,
                     payload_ref=payload,
                 )
+            except Exception:
+                pass
 
         # ── Iterative auto-turn chain ────────────────────────────────
         # If max_auto_turns > 0, check if any agent's reply contains
         # an @mention of another agent. If so, dispatch only that agent
         # and repeat until max_auto_turns is reached or no @mentions.
+        # Rebuild history from the DB to include concurrent replies.
         max_auto_turns = getattr(session, "max_auto_turns", None) or 0
-        if max_auto_turns > 0 and not target_agent_name:
+        if max_auto_turns > 0 and not requested_by_key:
             auto_turns_remaining = max_auto_turns
             # Track who spoke last — starts as the last agent in the
             # initial dispatch pass so the self-loop guard works
             # on the first auto-turn iteration too.
             last_agent_name = details[-1]["agent_name"] if details else None
             while auto_turns_remaining > 0:
-                # Check the last reply for an @mention
+                history = self._build_history(session_id)
+                if not history:
+                    break
                 last_reply = history[-1]["content"] if history else ""
                 next_target = self._parse_agent_mention(last_reply)
                 if not next_target:
@@ -246,12 +364,11 @@ class AgentRuntimeService:
                         session_id=session_id,
                         payload_ref=payload,
                     )
-                    history.append({"role": "assistant", "content": reply})
                 except Exception as exc:
                     payload = json.dumps(
                         {
                             "envelope": "agent_error",
-                            "body": f"{target_detail['agent_name']} konnte nicht antworten: {exc}",
+                            "body": f"{target_detail['agent_name']} could not respond: {exc}",
                             "from": "system",
                         }
                     )
@@ -267,6 +384,91 @@ class AgentRuntimeService:
                         payload_ref=payload,
                     )
                     break
+
+    @staticmethod
+    def _run_worker(
+        db_path: str,
+        session_id: str,
+        detail: Dict[str, Any],
+        user_body: str,
+        history: List[Dict[str, str]],
+        workspace_id: str,
+        channel_id: str,
+        session_type: str,
+        session_policy: Optional[List[str]],
+        results: List[Dict[str, Any]],
+        results_lock: threading.Lock,
+        errors: List[Dict[str, Any]],
+        errors_lock: threading.Lock,
+        barrier: threading.Barrier,
+        concurrency_sem: Optional[threading.Semaphore] = None,
+    ) -> None:
+        """Run a single participant's response in a dedicated worker thread.
+
+        Each worker opens its own fresh SQLite connection so that one
+        worker's failure (e.g. DB lock timeout) does not affect others.
+        The worker receives an isolated history snapshot so concurrent
+        replies don't see partial results from siblings.
+        """
+        conn = None
+        agent_name = detail["agent_name"]
+        tracker = AgentStatusTracker.get_instance()
+        try:
+            conn = get_connection(db_path)
+            apply_migrations(conn)
+
+            # Build a fresh runtime service on this worker's connection.
+            runtime = AgentRuntimeService(conn)
+            tracker.start_agent(session_id, agent_name)
+
+            session = runtime.sessions.get_by_id(session_id)
+            if session is None:
+                raise AgentRuntimeError(f"Session not found: {session_id!r}")
+
+            channel = runtime.participants.get_channel_for_session(session_id)
+
+            reply = runtime._generate_reply(
+                detail,
+                user_body=user_body,
+                history=history,
+                session=session,
+                session_policy=session_policy,
+                channel=channel,
+            )
+            if reply:
+                with results_lock:
+                    results.append({
+                        "agent_name": agent_name,
+                        "reply": reply,
+                        "binding_id": detail["binding_id"],
+                        "agent_profile_id": detail["agent_profile_id"],
+                    })
+                existing = tracker.get_status(session_id, agent_name)
+                if existing is None or existing.status not in {"error", "stopped"}:
+                    tracker.complete_agent(session_id, agent_name)
+            else:
+                existing = tracker.get_status(session_id, agent_name)
+                if existing is None or existing.status not in {"error", "stopped"}:
+                    tracker.complete_agent(session_id, agent_name)
+        except Exception as exc:
+            with errors_lock:
+                errors.append({
+                    "agent_name": agent_name,
+                    "error": str(exc),
+                })
+            tracker.complete_agent(session_id, agent_name, error=str(exc))
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            if concurrency_sem is not None:
+                concurrency_sem.release()
+            try:
+                barrier.wait()
+            except (threading.BrokenBarrierError, ValueError):
+                pass
 
     def _build_history(self, session_id: str, limit: int = 12) -> List[Dict[str, str]]:
         rows = self.messages.list_by_session(session_id)
@@ -291,7 +493,7 @@ class AgentRuntimeService:
         user_body: str,
         history: List[Dict[str, str]],
         session: Any,
-        session_policy: List[str],
+        session_policy: Optional[List[str]],
         channel: Optional[Dict[str, Any]] = None,
     ) -> str:
         provider_id = detail.get("provider_ref")
@@ -373,7 +575,7 @@ class AgentRuntimeService:
         history: List[Dict[str, str]],
         user_body: str,
         session: Any,
-        session_policy: List[str],
+        session_policy: Optional[List[str]],
         channel: Optional[Dict[str, Any]] = None,
     ) -> str:
         endpoint = (provider.endpoint_url or "").strip()
@@ -435,6 +637,7 @@ class AgentRuntimeService:
         iterations = 0
         final_text = ""
         work_steps: List[Dict[str, Any]] = []
+        had_error = False
         try:
             while iterations < max_iter:
                 if tracker.should_stop(session.session_id, agent_name):
@@ -492,6 +695,13 @@ class AgentRuntimeService:
                         agent_harness_type=(
                             profile.harness_ref if profile is not None else None
                         ),
+                        # Runtime calls are never trusted internal calls.  An
+                        # explicitly empty negotiated set must therefore stay
+                        # empty rather than becoming ``None`` (the dispatcher's
+                        # backwards-compatible unrestricted sentinel).
+                        allowed_tool_names=[
+                            t["function"]["name"] for t in (openai_tools or [])
+                        ],
                     )
                     tracker.complete_step(
                         session.session_id, agent_name,
@@ -512,7 +722,7 @@ class AgentRuntimeService:
                             self._post_confirmation_request(
                                 session=session,
                                 channel_id=channel["channel_id"],
-                                invocation_id=result.invocation_id,
+                                invocation_id=result.invocation_id or "",
                                 tool_name=result.tool_name,
                                 tool_harness_type=result.harness_type,
                                 agent_harness_type=profile.harness_ref if profile is not None else None,
@@ -529,6 +739,7 @@ class AgentRuntimeService:
                             "content": result.content,
                         })
         except Exception as exc:
+            had_error = True
             tracker.complete_agent(
                 session.session_id, agent_name,
                 error=str(exc),
@@ -548,18 +759,23 @@ class AgentRuntimeService:
                     "steps": work_steps,
                     "status": "completed" if not final_text.startswith("[agent stopped") else "stopped",
                 })
-                self.routing.route_message(
-                    workspace_id=session.workspace_id,
-                    channel_id=channel["channel_id"],
-                    source_type="agent",
-                    source_id=agent_name,
-                    target_type="all",
-                    target_id="@all",
-                    message_kind="agent_work",
-                    session_id=session.session_id,
-                    payload_ref=work_payload,
-                )
-            tracker.complete_agent(session.session_id, agent_name)
+                try:
+                    self.routing.route_message(
+                        workspace_id=session.workspace_id,
+                        channel_id=channel["channel_id"],
+                        source_type="agent",
+                        source_id=agent_name,
+                        target_type="all",
+                        target_id="@all",
+                        message_kind="agent_work",
+                        session_id=session.session_id,
+                        payload_ref=work_payload,
+                    )
+                except Exception:
+                    # Work telemetry must not overwrite the actual agent state.
+                    pass
+            if not had_error:
+                tracker.complete_agent(session.session_id, agent_name)
         return final_text
 
     def _post_confirmation_request(
@@ -634,6 +850,7 @@ def launch_agent_responses_async(
     user_body: str,
     user_id: str,
     target_agent_name: Optional[str] = None,
+    target_agent_names: Optional[Sequence[str]] = None,
 ) -> None:
     thread = threading.Thread(
         target=run_agent_responses,
@@ -643,6 +860,7 @@ def launch_agent_responses_async(
             "user_body": user_body,
             "user_id": user_id,
             "target_agent_name": target_agent_name,
+            "target_agent_names": target_agent_names,
         },
         daemon=True,
         name=f"agent-workbench-session-{session_id[:8]}",
@@ -657,6 +875,7 @@ def run_agent_responses(
     user_body: str,
     user_id: str,
     target_agent_name: Optional[str] = None,
+    target_agent_names: Optional[Sequence[str]] = None,
 ) -> None:
     conn = get_connection(db_path)
     try:
@@ -666,6 +885,7 @@ def run_agent_responses(
             user_body=user_body,
             user_id=user_id,
             target_agent_name=target_agent_name,
+            target_agent_names=target_agent_names,
         )
     finally:
         conn.close()

@@ -58,7 +58,7 @@ def up(conn: sqlite3.Connection) -> None:
     # harness_runs: backlink to the tool invocation that triggered it
     # -----------------------------------------------------------------------
     existing_cols = {
-        row["name"]
+        row["name"] if isinstance(row, sqlite3.Row) else row[1]
         for row in conn.execute("PRAGMA table_info(harness_runs)").fetchall()
     }
     if "tool_invocation_id" not in existing_cols:

@@ -1,85 +1,64 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>TaskSpec {{ spec.task_spec_id }} — {{ spec.approval_status }}</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.4rem; }
-    .status { padding: 0.25rem 0.6rem; border-radius: 4px; background: #eee; }
-    .status.approved { background: #d3f9d8; }
-    .status.rejected { background: #ffe3e3; }
-    .status.draft { background: #fff3bf; }
-    .field { margin: 1rem 0; }
-    .field label { font-weight: 600; display: block; }
-    pre { background: #f6f6f6; padding: 0.6rem; border-radius: 4px; overflow-x: auto; }
-    .actions { margin: 1.5rem 0; display: flex; gap: 0.5rem; }
-    button, .btn {
-      padding: 0.5rem 1rem; border: 1px solid #999; border-radius: 4px;
-      background: #fafafa; cursor: pointer; font-size: 1rem;
-    }
-    button.approve { background: #d3f9d8; }
-    button.reject { background: #ffe3e3; }
-    .meta { color: #555; font-size: 0.9rem; }
-  </style>
-</head>
-<body>
-  <h1>TaskSpec <code>{{ spec.task_spec_id }}</code></h1>
-  <p>
-    <span class="status {{ spec.approval_status }}">{{ spec.approval_status }}</span>
-    <span class="meta">
-      · workspace {{ spec.workspace_id }}
-      {% if spec.source_session_id %} · source session {{ spec.source_session_id }}{% endif %}
-      {% if spec.risk_level %} · risk: {{ spec.risk_level }}{% endif %}
-    </span>
-  </p>
+{% extends "base.html" %}
+{% block title %}TaskSpec {{ spec.task_spec_id }} — {{ spec.approval_status }}{% endblock %}
 
-  <div class="field">
-    <label>Objective</label>
-    <p>{{ spec.objective or "(empty)" }}</p>
-  </div>
+{% block content %}
+<h1>TaskSpec <code>{{ spec.task_spec_id }}</code></h1>
+<p>
+  <span class="badge badge-{{ spec.approval_status if spec.approval_status in ('approved', 'rejected', 'draft') else 'system' }}">{{ spec.approval_status }}</span>
+  <span class="muted">
+    · workspace {{ spec.workspace_id }}
+    {% if spec.source_session_id %} · source session {{ spec.source_session_id }}{% endif %}
+    {% if spec.risk_level %} · risk: {{ spec.risk_level }}{% endif %}
+  </span>
+</p>
 
-  <div class="field">
-    <label>Scope (in)</label>
-    <pre>{{ spec.scope_in | tojson(indent=2) if spec.scope_in is not none else "(not set)" }}</pre>
-  </div>
+<div class="field" style="margin:1rem 0;">
+  <label style="font-weight:600; display:block;">Objective</label>
+  <p>{{ spec.objective or "(empty)" }}</p>
+</div>
 
-  <div class="field">
-    <label>Scope (out)</label>
-    <pre>{{ spec.scope_out | tojson(indent=2) if spec.scope_out is not none else "(not set)" }}</pre>
-  </div>
+<div class="field" style="margin:1rem 0;">
+  <label style="font-weight:600; display:block;">Scope (in)</label>
+  <pre>{{ spec.scope_in | tojson(indent=2) if spec.scope_in is not none else "(not set)" }}</pre>
+</div>
 
-  <div class="field">
-    <label>Acceptance criteria</label>
-    <pre>{{ spec.acceptance_criteria | tojson(indent=2) if spec.acceptance_criteria is not none else "(not set)" }}</pre>
-  </div>
+<div class="field" style="margin:1rem 0;">
+  <label style="font-weight:600; display:block;">Scope (out)</label>
+  <pre>{{ spec.scope_out | tojson(indent=2) if spec.scope_out is not none else "(not set)" }}</pre>
+</div>
 
-  <div class="field">
-    <label>Constraints</label>
-    <pre>{{ spec.constraints | tojson(indent=2) if spec.constraints is not none else "(not set)" }}</pre>
-  </div>
+<div class="field" style="margin:1rem 0;">
+  <label style="font-weight:600; display:block;">Acceptance criteria</label>
+  <pre>{{ spec.acceptance_criteria | tojson(indent=2) if spec.acceptance_criteria is not none else "(not set)" }}</pre>
+</div>
 
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-      <ul class="flashes">
-        {% for category, msg in messages %}
-          <li class="flash {{ category }}">{{ msg }}</li>
-        {% endfor %}
-      </ul>
-    {% endif %}
-  {% endwith %}
+<div class="field" style="margin:1rem 0;">
+  <label style="font-weight:600; display:block;">Constraints</label>
+  <pre>{{ spec.constraints | tojson(indent=2) if spec.constraints is not none else "(not set)" }}</pre>
+</div>
 
-  {% if spec.approval_status in ("draft", "pending_review") %}
-  <div class="actions">
-    <form method="post" action="{{ url_for('task_specs.approve', task_spec_id=spec.task_spec_id) }}">
-      <button type="submit" class="approve" data-testid="approve-btn">Approve</button>
-    </form>
-    <form method="post" action="{{ url_for('task_specs.reject', task_spec_id=spec.task_spec_id) }}">
-      <button type="submit" class="reject" data-testid="reject-btn">Reject</button>
-    </form>
-  </div>
-  {% else %}
-  <p class="meta">This TaskSpec is in terminal state <strong>{{ spec.approval_status }}</strong> — approval actions are unavailable.</p>
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    <ul class="flashes">
+      {% for category, msg in messages %}
+        <li class="flash {{ category }}">{{ msg }}</li>
+      {% endfor %}
+    </ul>
   {% endif %}
-</body>
-</html>
+{% endwith %}
+
+{% if spec.approval_status in ("draft", "pending_review") %}
+<div class="actions" style="margin:1.5rem 0; display:flex; gap:0.5rem;">
+  <form method="post" action="{{ url_for('task_specs.approve', task_spec_id=spec.task_spec_id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn" style="background:var(--success-bg); color:var(--success-ink);" data-testid="approve-btn">Approve</button>
+  </form>
+  <form method="post" action="{{ url_for('task_specs.reject', task_spec_id=spec.task_spec_id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn" style="background:var(--err-bg); color:var(--err-ink);" data-testid="reject-btn">Reject</button>
+  </form>
+</div>
+{% else %}
+<p class="muted">This TaskSpec is in terminal state <strong>{{ spec.approval_status }}</strong> — approval actions are unavailable.</p>
+{% endif %}
+{% endblock %}

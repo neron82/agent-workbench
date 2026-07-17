@@ -46,6 +46,20 @@ DEFAULT_MAX_AUTO_TURNS: dict[str, int] = {
 }
 
 
+def _cleanup_session_lock(session_id: str) -> None:
+    """Remove the module-level session lock from agent_runtime_service.
+
+    Called during session deletion so the lock doesn't accumulate
+    indefinitely in the module-level dict.
+    """
+    from agent_workbench.services.agent_runtime_service import (
+        _session_locks,
+        _session_locks_lock,
+    )
+    with _session_locks_lock:
+        _session_locks.pop(session_id, None)
+
+
 class SessionService:
     """High-level session lifecycle service."""
 
@@ -175,9 +189,6 @@ class SessionService:
         tables that reference indirect children (e.g. harness_events
         references harness_runs).
         """
-        session = self.get_session(session_id)
-        ws_id = session.workspace_id
-
         # 1. Unlink from channel if linked
         self.conn.execute(
             "UPDATE channels SET active_session_id = NULL "
@@ -235,50 +246,72 @@ class SessionService:
                 (hrid,),
             )
 
-        # 5. Delete harness runs
+        # 4b. NULL event_records.routed_message_id before deleting routed_messages
         self.conn.execute(
-            "DELETE FROM harness_runs WHERE session_id = ?",
+            "UPDATE event_records SET routed_message_id = NULL "
+            "WHERE routed_message_id IN ("
+            "  SELECT routed_message_id FROM routed_messages WHERE session_id = ?"
+            ")",
             (session_id,),
         )
 
-        # 6. Delete replay_records (NOT NULL FK to fork_records)
-        for fid in fk_ids:
-            self.conn.execute(
-                "DELETE FROM replay_records WHERE fork_id = ?", (fid,)
-            )
-
-        # 7. NULL fork_id on child sessions
-        for fid in fk_ids:
-            self.conn.execute(
-                "UPDATE session_extensions SET fork_id = NULL WHERE fork_id = ?", (fid,)
-            )
-
-        # 8. Delete fork records
-        self.conn.execute(
-            "DELETE FROM fork_records WHERE parent_session_id = ? OR child_session_id = ?",
-            (session_id, session_id),
-        )
-
-        # 9. Delete tool invocations
+        # 5. Delete tool invocations (FK to harness_runs — must be before step 6)
         self.conn.execute(
             "DELETE FROM tool_invocations WHERE session_id = ?",
             (session_id,),
         )
 
-        # 10. NULL review_records FK (optional FK to bindings)
+        # 6. Delete harness runs
+        self.conn.execute(
+            "DELETE FROM harness_runs WHERE session_id = ?",
+            (session_id,),
+        )
+
+        # 7. Delete replay_records (NOT NULL FK to fork_records)
+        for fid in fk_ids:
+            self.conn.execute(
+                "DELETE FROM replay_records WHERE fork_id = ?", (fid,)
+            )
+
+        # 8. NULL fork_id on child sessions
+        for fid in fk_ids:
+            self.conn.execute(
+                "UPDATE session_extensions SET fork_id = NULL WHERE fork_id = ?", (fid,)
+            )
+
+        # 9. Delete fork records
+        self.conn.execute(
+            "DELETE FROM fork_records WHERE parent_session_id = ? OR child_session_id = ?",
+            (session_id, session_id),
+        )
+
+        # 10. Delete participant_transfers where session is source or target
+        self.conn.execute(
+            "DELETE FROM participant_transfers WHERE source_session_id = ? OR target_session_id = ?",
+            (session_id, session_id),
+        )
+
+        # Permission rows intentionally have no session FK because they predate
+        # the session-extension model; remove them explicitly with the session.
+        self.conn.execute(
+            "DELETE FROM cross_harness_permissions WHERE session_id = ?",
+            (session_id,),
+        )
+
+        # 11. NULL review_records FK (optional FK to bindings)
         for bid in binding_ids:
             self.conn.execute(
                 "UPDATE review_records SET reviewer_binding_id = NULL WHERE reviewer_binding_id = ?",
                 (bid,),
             )
 
-        # 11. NULL session_extensions FK to bindings
+        # 12. NULL session_extensions FK to bindings
         self.conn.execute(
             "UPDATE session_extensions SET agent_profile_binding_id = NULL WHERE session_id = ?",
             (session_id,),
         )
 
-        # 12. Delete bindings (hard-delete participants first — NOT NULL FK)
+        # 13. Delete bindings (hard-delete participants first — NOT NULL FK)
         self.conn.execute(
             "DELETE FROM session_participants WHERE session_id = ?",
             (session_id,),
@@ -288,15 +321,20 @@ class SessionService:
             (session_id,),
         )
 
-        # 13. Delete routed messages
+        # 14. Delete routed messages
         self.conn.execute(
             "DELETE FROM routed_messages WHERE session_id = ?",
             (session_id,),
         )
 
-        # 14. Delete the session itself
+        # 15. Delete the session itself
         self.sessions.delete(session_id)
         self.conn.commit()
+        from agent_workbench.services.agent_status import AgentStatusTracker
+        AgentStatusTracker.get_instance().cleanup_session(session_id)
+
+        # 16. Clean up the module-level session lock
+        _cleanup_session_lock(session_id)
 
     def assign_task_spec(
         self, session_id: str, task_spec_id: Optional[str]

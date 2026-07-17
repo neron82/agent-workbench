@@ -13,14 +13,12 @@ monkey-patched to return canned responses.  The point is to exercise:
 from __future__ import annotations
 
 import json
-import urllib.error
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from unittest.mock import patch
 
-import pytest
 
 from agent_workbench.models.channel import ChannelRepository
-from agent_workbench.models.provider import Provider, ProviderRepository
+from agent_workbench.models.provider import ProviderRepository
 from agent_workbench.models.routed_message import RoutedMessageRepository
 from agent_workbench.models.session_extension import SessionExtensionRepository
 from agent_workbench.models.tool import ToolRepository
@@ -579,7 +577,9 @@ class TestSeedBuiltinTools:
             assert ("shell", "run_command") in names
             assert ("hermes", "run_command") in names
             assert ("hermes", "write_file") in names
-            assert ("hermes", "delegate_subagent") in names
+            # delegate_subagent is seeded but disabled by default
+            all_names = {(t.harness_type, t.name) for t in ToolRepository(db).list_all()}
+            assert ("hermes", "delegate_subagent") in all_names
         finally:
             db.close()
 

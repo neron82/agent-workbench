@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import signal
 import subprocess
 import time
 from typing import Any, Dict, Optional

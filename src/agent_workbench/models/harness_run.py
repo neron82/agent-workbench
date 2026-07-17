@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -71,7 +70,9 @@ class HarnessRunRepository:
             ),
         )
         self.conn.commit()
-        return self.get_by_id(harness_run_id)
+        result = self.get_by_id(harness_run_id)
+        assert result is not None
+        return result
 
     def get_by_id(self, harness_run_id: str) -> Optional[HarnessRun]:
         row = self.conn.execute(

@@ -5,7 +5,7 @@
 <h1>Channels</h1>
 
 {% if not workspace_id %}
-  <div class="panel">
+  <div class="card">
     <p>No workspace found. Create one to get started.</p>
   </div>
 {% else %}
@@ -15,19 +15,19 @@
   </p>
 
   {% for kind in ['chat', 'research', 'work'] %}
-    <section class="group">
+    <section class="card" style="margin-bottom:16px;">
       <h2>
-        <span class="pill kind-{{ kind }}">{{ kind }}</span>
+        <span class="badge badge-{{ kind }}">{{ kind }}</span>
         {{ channels_by_kind[kind]|length }} channel{{ '' if channels_by_kind[kind]|length == 1 else 's' }}
       </h2>
-      <ul class="channel-list">
+      <ul class="session-list">
         {% for ch in channels_by_kind[kind] %}
           <li>
-            <span class="pill kind-{{ ch.channel_kind }}">{{ ch.channel_kind }}</span>
+            <span class="badge badge-{{ ch.channel_kind }}">{{ ch.channel_kind }}</span>
             <a class="title" href="{{ url_for('channels.show_channel', channel_id=ch.channel_id) }}">
               {{ ch.title or '(untitled)' }}
             </a>
-            <span class="pill status-{{ ch.status }}">{{ ch.status }}</span>
+            <span class="badge badge-{{ ch.status if ch.status in ('active', 'done', 'failed', 'blocked') else 'system' }}">{{ ch.status }}</span>
             {% set active = active_sessions.get(ch.channel_id) %}
             {% if active %}
               <a class="muted" href="{{ url_for('sessions.show_session', session_id=active.session_id) }}">
@@ -37,20 +37,22 @@
               <span class="muted">no active session</span>
             {% endif %}
             <form method="post" action="{{ url_for('channels.fork_channel', channel_id=ch.channel_id) }}" class="inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="new_session_type" value="research">
-              <button type="submit" class="secondary">Fork</button>
+              <button type="submit" class="btn btn-sm">Fork</button>
             </form>
           </li>
         {% else %}
-          <li class="empty">No {{ kind }} channels yet.</li>
+          <li class="muted">No {{ kind }} channels yet.</li>
         {% endfor %}
       </ul>
     </section>
   {% endfor %}
 
-  <section class="panel">
+  <section class="card">
     <h2>Create a new channel</h2>
     <form method="post" action="{{ url_for('channels.create_channel') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="workspace_id" value="{{ workspace_id }}">
       <div class="form-row">
         <label for="channel_kind">Kind</label>
@@ -65,13 +67,13 @@
           <input type="checkbox" name="create_session" value="1" checked>
           spawn initial session
         </label>
-        <button type="submit">Create</button>
+        <button type="submit" class="btn btn-primary">Create</button>
       </div>
     </form>
   </section>
 
   {% if workspaces and workspaces|length > 1 %}
-    <section class="panel">
+    <section class="card">
       <h3>Switch workspace</h3>
       <form method="get" action="{{ url_for('channels.list_channels') }}" class="form-row">
         <label for="workspace_id">Workspace</label>
@@ -82,7 +84,7 @@
             </option>
           {% endfor %}
         </select>
-        <button type="submit" class="secondary">Switch</button>
+        <button type="submit" class="btn btn-sm">Switch</button>
       </form>
     </section>
   {% endif %}

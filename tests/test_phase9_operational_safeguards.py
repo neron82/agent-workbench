@@ -65,7 +65,8 @@ def app(
 
 @pytest.fixture()
 def client(app: Flask) -> FlaskClient:
-    return app.test_client()
+    from tests.conftest import make_csrf_client
+    return make_csrf_client(app)
 
 
 def _build_app(
@@ -354,12 +355,15 @@ class TestCookieDefaults:
         # SESSION_COOKIE_SECURE defaults to False on a plain Flask app
         # and the factory must not flip it on in test/dev mode.
         assert app.config["SESSION_COOKIE_SECURE"] is False
-        # SESSION_COOKIE_SAMESITE defaults to None in test/dev mode.
-        assert app.config["SESSION_COOKIE_SAMESITE"] is None
+        # SESSION_COOKIE_SAMESITE is set to 'Lax' in all environments
+        # for CSRF protection; HttpOnly is also set globally.
+        assert app.config["SESSION_COOKIE_SAMESITE"] == "Lax"
+        assert app.config["SESSION_COOKIE_HTTPONLY"] is True
 
     def test_development_mode_does_not_over_apply_secure_defaults(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         application = _build_app(tmp_path, monkeypatch, environment="development")
         assert application.config["SESSION_COOKIE_SECURE"] is False
-        assert application.config["SESSION_COOKIE_SAMESITE"] is None
+        assert application.config["SESSION_COOKIE_SAMESITE"] == "Lax"
+        assert application.config["SESSION_COOKIE_HTTPONLY"] is True

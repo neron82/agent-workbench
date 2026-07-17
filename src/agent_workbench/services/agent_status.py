@@ -66,19 +66,53 @@ class AgentStatusTracker:
     def _key(self, session_id: str, agent_name: str) -> str:
         return f"{session_id}:{agent_name}"
 
-    def start_agent(self, session_id: str, agent_name: str) -> None:
-        """Mark an agent as working."""
+    def init_agent(self, session_id: str, agent_name: str) -> None:
+        """Register an agent as idle (ready to work, not yet started).
+
+        Idempotent — if the agent is already registered, this is a no-op.
+        The entry is created so the status JSON always shows every active
+        participant (idle / queued / working / completed / error / stopped).
+        """
         key = self._key(session_id, agent_name)
         with self._data_lock:
+            if key in self._status:
+                return
             self._status[key] = AgentStatus(
                 session_id=session_id,
                 agent_name=agent_name,
-                status="working",
-                started_at=time.time(),
+                status="idle",
                 steps=[],
                 iteration_count=0,
             )
-            self._stop_events[key] = threading.Event()
+            self._stop_events.setdefault(key, threading.Event())
+
+    def queue_agent(self, session_id: str, agent_name: str) -> None:
+        """Mark an idle agent as queued (waiting for a worker thread)."""
+        key = self._key(session_id, agent_name)
+        with self._data_lock:
+            status = self._status.get(key)
+            if status is not None:
+                status.status = "queued"
+
+    def start_agent(self, session_id: str, agent_name: str) -> None:
+        """Mark an agent as working (transition from idle/queued, or create)."""
+        key = self._key(session_id, agent_name)
+        with self._data_lock:
+            self._stop_events.setdefault(key, threading.Event())
+            status = self._status.get(key)
+            if status is not None:
+                status.status = "working"
+                status.started_at = time.time()
+                status.error = None
+            else:
+                self._status[key] = AgentStatus(
+                    session_id=session_id,
+                    agent_name=agent_name,
+                    status="working",
+                    started_at=time.time(),
+                    steps=[],
+                    iteration_count=0,
+                )
 
     def start_step(
         self,

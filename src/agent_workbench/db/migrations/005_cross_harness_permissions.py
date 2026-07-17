@@ -28,15 +28,12 @@ adds two things:
 from __future__ import annotations
 
 import sqlite3
-import time
 
 MIGRATION_ID = "005_cross_harness_permissions"
 DESCRIPTION = "Cross-harness confirmation permissions + pending_confirmation status"
 
 
 def up(conn: sqlite3.Connection) -> None:
-    now = time.time()
-
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS cross_harness_permissions (
@@ -74,7 +71,7 @@ def up(conn: sqlite3.Connection) -> None:
     # with the wider CHECK, copying the data over, and dropping the
     # old one.  This is the standard SQLite idiom.
     existing_columns = {
-        row["name"]
+        row["name"] if isinstance(row, sqlite3.Row) else row[1]
         for row in conn.execute("PRAGMA table_info(tool_invocations)").fetchall()
     }
     if "requires_confirmation" not in existing_columns:

@@ -1,72 +1,169 @@
 {% extends "base.html" %}
-{% block title %}Agent Workbench{% endblock %}
+{% block title %}{{ workspace_name or 'Workspace' }} — Agent Workbench{% endblock %}
 
 {% block content %}
-<div class="landing-grid">
-  <div class="start-card full-width">
+<div class="dashboard">
+  <div class="workspace-header">
+    <div>
+      <div class="eyebrow">Workspace</div>
+      <h1>{{ workspace_name or 'Default Workspace' }}</h1>
+      <p class="muted">{{ session_browser.total }} session{{ '' if session_browser.total == 1 else 's' }} in this project</p>
+    </div>
+    <div class="workspace-header-actions">
+      {% if workspace_id %}
+        <a class="btn btn-secondary" href="{{ url_for('channels.workspace_settings', workspace_id=workspace_id) }}">Workspace settings</a>
+      {% endif %}
+      <form method="post" action="{{ url_for('channels.create_workspace') }}" class="inline new-project-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="text" name="name" placeholder="New project name" aria-label="New project name" required>
+        <button type="submit" class="btn btn-primary">+ New Project</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="identity-bar">
+    <div class="identity-info">
+      <span class="identity-avatar">{{ current_user_display[0]|upper if current_user_display else 'U' }}</span>
+      <span class="identity-name">{{ current_user_display or 'User' }}</span>
+    </div>
+    <span class="workspace-label">{{ workspace_name or 'Default Workspace' }}</span>
+  </div>
+
+  <div class="start-card">
     <h2>Start a new session</h2>
+    {% set initial_type = session_browser.session_type if session_browser.session_type in ['chat', 'research', 'work'] else 'chat' %}
     <form method="post" action="{{ url_for('channels.create_channel') }}" id="start-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="workspace_id" value="{{ workspace_id or '' }}">
       <input type="hidden" name="create_session" value="1">
-      <div class="start-options" id="type-picker">
-        <div class="start-option selected" data-kind="chat" onclick="pickType('chat')">
-          <div class="option-icon">💬</div>
-          <div class="option-label">Chat</div>
-          <div class="option-desc">General conversation</div>
-        </div>
-        <div class="start-option" data-kind="research" onclick="pickType('research')">
-          <div class="option-icon">🔬</div>
-          <div class="option-label">Research</div>
-          <div class="option-desc">Deep investigation</div>
-        </div>
-        <div class="start-option" data-kind="work" onclick="pickType('work')">
-          <div class="option-icon">⚡</div>
-          <div class="option-label">Work</div>
-          <div class="option-desc">Structured execution</div>
-        </div>
+      <div class="start-options" id="type-picker" role="radiogroup" aria-label="Session type">
+        {% set label_colors = {'chat': 'var(--chat)', 'research': 'var(--research)', 'work': 'var(--work)'} %}
+        {% for key, display, desc in [('chat', 'Chat', 'General conversation'), ('research', 'Research', 'Deep investigation'), ('work', 'Work', 'Structured execution')] %}
+          <button type="button" class="start-option{% if key == initial_type %} selected{% endif %}"
+                  data-kind="{{ key }}" role="radio" aria-checked="{{ 'true' if key == initial_type else 'false' }}" tabindex="0">
+            <span class="option-icon" style="color: {{ label_colors[key] }};">{% if key == 'chat' %}💬{% elif key == 'research' %}🔬{% else %}⚡{% endif %}</span>
+            <span class="option-label">{{ display }}</span>
+            <span class="option-desc">{{ desc }}</span>
+          </button>
+        {% endfor %}
       </div>
-      <input type="hidden" name="channel_kind" id="channel-kind" value="chat">
-      <input type="hidden" name="title" id="channel-title" value="">
+      <input type="hidden" name="channel_kind" id="channel-kind" value="{{ initial_type }}">
       <div class="form-row">
-        <input type="text" name="title" placeholder="Session name (optional)" style="flex:1; max-width:300px;" id="session-name">
+        <input type="text" name="title" placeholder="Session name (optional)" class="input-session-name" id="session-name" aria-label="Session name">
         <button type="submit" class="btn btn-primary">Start session →</button>
       </div>
     </form>
   </div>
 
-  <div class="recent-sessions full-width">
-    <h2>Recent sessions</h2>
-    {% if recent_sessions %}
-      {% for s in recent_sessions %}
-        <a href="{{ url_for('sessions.show_session', session_id=s.session_id) }}" class="session-row" style="display:flex; text-decoration:none; color:inherit;">
-          <span class="badge badge-{{ s.session_type }}">{{ s.session_type }}</span>
-          <div class="sess-info">
-            <div class="sess-title truncate">{{ s.title or s.session_id[:12] ~ '…' }}</div>
-            <div class="sess-meta">
-              <span class="badge badge-{{ s.status }}">{{ s.status }}</span>
-              · {{ s.created_at|float|default(0)|int|datetime }}
+  <section class="session-browser" aria-labelledby="session-browser-title">
+    <div class="browser-heading">
+      <div>
+        <div class="eyebrow">Workspace activity</div>
+        <h2 id="session-browser-title">Session browser</h2>
+      </div>
+      <div class="view-toggle" role="group" aria-label="Session view">
+        <a class="btn btn-sm{% if session_browser.view == 'cards' %} btn-primary{% endif %}" href="{{ url_for('channels.index', workspace_id=workspace_id, q=session_browser.q, status=session_browser.status, type=session_browser.session_type, sort=session_browser.sort, view='cards') }}">Cards</a>
+        <a class="btn btn-sm{% if session_browser.view == 'table' %} btn-primary{% endif %}" href="{{ url_for('channels.index', workspace_id=workspace_id, q=session_browser.q, status=session_browser.status, type=session_browser.session_type, sort=session_browser.sort, view='table') }}">Table</a>
+      </div>
+    </div>
+
+    <form method="get" action="{{ url_for('channels.index') }}" class="browser-filters">
+      <input type="hidden" name="workspace_id" value="{{ workspace_id }}">
+      <input type="search" name="q" value="{{ session_browser.q }}" placeholder="Search titles and messages…" aria-label="Search sessions">
+      <select name="status" aria-label="Filter by status">
+        <option value="all"{% if session_browser.status == 'all' %} selected{% endif %}>All statuses</option>
+        {% for status in ['active', 'waiting_review', 'waiting_approval', 'done', 'blocked', 'failed', 'archived'] %}
+          <option value="{{ status }}"{% if session_browser.status == status %} selected{% endif %}>{{ status|replace('_', ' ')|title }}</option>
+        {% endfor %}
+      </select>
+      <select name="type" aria-label="Filter by type">
+        <option value="all"{% if session_browser.session_type == 'all' %} selected{% endif %}>All types</option>
+        {% for kind in ['chat', 'research', 'work'] %}
+          <option value="{{ kind }}"{% if session_browser.session_type == kind %} selected{% endif %}>{{ kind|title }}</option>
+        {% endfor %}
+      </select>
+      <select name="sort" aria-label="Sort sessions">
+        {% for value, label in [('updated', 'Recently updated'), ('created', 'Recently created'), ('title', 'Title'), ('message_count', 'Message count')] %}
+          <option value="{{ value }}"{% if session_browser.sort == value %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <input type="hidden" name="view" value="{{ session_browser.view }}">
+      <button type="submit" class="btn btn-primary">Apply</button>
+    </form>
+
+    {% if session_browser.view == 'table' %}
+      <div class="session-browser-table-wrap">
+        <table class="session-browser-table">
+          <thead><tr><th>Session</th><th>Type</th><th>Status</th><th>Messages</th><th></th><th></th></tr></thead>
+          <tbody>
+          {% for card in session_browser.cards %}
+            <tr>
+              <td><a href="{{ url_for('sessions.show_session', session_id=card.session_id) }}"><strong>{{ card.title or card.session_id[:12] ~ '…' }}</strong></a>
+                {% if card.last_payload_ref %}<div class="muted table-snippet">{{ message_body(card.last_payload_ref)|truncate(120, True, '…') }}</div>{% endif %}</td>
+              <td><span class="badge badge-{{ card.session_type }}">{{ card.session_type }}</span></td>
+              <td><span class="badge badge-{{ card.status }}">{{ card.status|replace('_', ' ') }}</span></td>
+              <td>{{ card.message_count }}</td>
+              <td><a class="btn btn-sm" href="{{ url_for('sessions.show_session', session_id=card.session_id) }}">Open →</a></td>
+              <td><form method="post" action="{{ url_for('sessions.delete_session', session_id=card.session_id) }}" onsubmit="return confirm('Delete this session? This action is permanent and cannot be undone.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-danger" aria-label="Delete session {{ card.title or card.session_id[:12] }}">Delete</button></form></td>
+            </tr>
+          {% else %}
+            <tr><td colspan="6" class="empty-state">No sessions match these filters.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="session-card-grid browser-grid">
+        {% for card in session_browser.cards %}
+          <div class="session-card" data-session-id="{{ card.session_id }}">
+            <a href="{{ url_for('sessions.show_session', session_id=card.session_id) }}" class="session-card-link" aria-label="Open session {{ card.title or card.session_id[:12] }}">
+              <div class="card-header-row">
+                <span class="badge badge-{{ card.session_type }}">{{ session_label_display.get(card.session_type, card.session_type) }}</span>
+                <span class="badge badge-{{ card.status }}">{{ card.status|replace('_', ' ') }}</span>
+              </div>
+              <div class="card-title truncate">{{ card.title or card.session_id[:12] ~ '…' }}</div>
+              <div class="session-preview">{% if card.last_payload_ref %}{{ message_body(card.last_payload_ref)|truncate(150, True, '…') }}{% else %}<span class="muted">No messages yet.</span>{% endif %}</div>
+              <div class="card-meta-row"><span class="card-meta-item">👤 {{ participant_counts.get(card.session_id, 0) }} agent{{ 's' if participant_counts.get(card.session_id, 0) != 1 }}</span><span class="card-meta-item">💬 {{ card.message_count }}</span></div>
+              <div class="card-footer"><span class="card-continue">Continue →</span>{% if working_counts.get(card.session_id, 0) > 0 %}<span class="working-indicator">⏳ {{ working_counts[card.session_id] }} working</span>{% endif %}</div>
+            </a>
+            <div class="card-actions">
+              <form method="post" action="{{ url_for('sessions.delete_session', session_id=card.session_id) }}" onsubmit="return confirm('Delete this session? This action is permanent and cannot be undone.');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-danger" aria-label="Delete session {{ card.title or card.session_id[:12] }}">Delete</button>
+              </form>
             </div>
           </div>
-          <div class="sess-actions">
-            <span class="btn btn-sm" onclick="event.stopPropagation(); window.location.href='{{ url_for('sessions.show_session', session_id=s.session_id) }}'">Continue →</span>
-          </div>
-        </a>
-      {% endfor %}
-    {% else %}
-      <div class="empty-state">
-        <div class="empty-icon">🗨️</div>
-        <h3>No sessions yet</h3>
-        <p class="muted">Start a new session above to begin.</p>
+        {% else %}
+          <div class="empty-state full-width"><div class="empty-icon">🗨️</div><h3>No sessions match these filters</h3><p class="muted">Adjust the search or start a new session above.</p></div>
+        {% endfor %}
       </div>
     {% endif %}
-  </div>
+
+    <div class="browser-footer">
+      <span class="muted">Showing {{ session_browser.cards|length }} of {{ session_browser.total }}</span>
+      {% if session_browser.pages > 1 %}
+        <div class="pagination">
+          {% for n in range(1, session_browser.pages + 1) %}
+            <a class="btn btn-sm{% if n == session_browser.page %} btn-primary{% endif %}" href="{{ url_for('channels.index', workspace_id=workspace_id, q=session_browser.q, status=session_browser.status, type=session_browser.session_type, sort=session_browser.sort, view=session_browser.view, page=n, per_page=session_browser.page_size) }}">{{ n }}</a>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+  </section>
 </div>
 
 <script>
 function pickType(kind) {
-  document.querySelectorAll('.start-option').forEach(el => el.classList.remove('selected'));
-  document.querySelector(`.start-option[data-kind="${kind}"]`).classList.add('selected');
+  document.querySelectorAll('.start-option').forEach(function(el) { el.classList.remove('selected'); el.setAttribute('aria-checked', 'false'); });
+  var sel = document.querySelector('.start-option[data-kind="' + kind + '"]');
+  if (sel) { sel.classList.add('selected'); sel.setAttribute('aria-checked', 'true'); }
   document.getElementById('channel-kind').value = kind;
 }
+document.addEventListener('DOMContentLoaded', function() {
+  document.querySelectorAll('.start-option').forEach(function(option) {
+    option.addEventListener('click', function() { pickType(option.dataset.kind); });
+    option.addEventListener('keydown', function(event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pickType(option.dataset.kind); } });
+  });
+});
 </script>
 {% endblock %}

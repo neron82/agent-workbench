@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Your identity — Agent Workbench{% endblock %}
+{% block content %}
+<section class="panel identity-form-panel" style="max-width:560px;margin:48px auto;">
+  <p class="eyebrow">Workspace identity</p>
+  <h1>How should the team address you?</h1>
+  <p class="muted">This is a local browser identity for now. It gives messages a real author name without pretending we have an enterprise IAM system hiding in the cupboard.</p>
+  <form method="post" style="display:grid;gap:16px;margin-top:24px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="display-name">Display name</label>
+    <input id="display-name" name="display_name" value="{{ current_user.display_name }}" placeholder="e.g. Basti" maxlength="80" required autofocus>
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <a class="btn" href="{{ next_url or url_for('channels.index') }}">Cancel</a>
+      <button class="btn btn-primary" type="submit">Save identity</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

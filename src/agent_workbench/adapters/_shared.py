@@ -10,9 +10,8 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
-import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from agent_workbench.db import get_connection
 from agent_workbench.services import TranscriptService

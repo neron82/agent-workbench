@@ -10,6 +10,7 @@ venv/
 *.db
 *.db-shm
 *.db-wal
+var/uploads/
 
 # Secrets
 .workbench.secrets.env
@@ -31,3 +32,6 @@ build/
 # Environment
 .env
 .env.local
+
+# Local agent review/planning artifacts
+.hermes/

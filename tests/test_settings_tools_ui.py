@@ -34,7 +34,8 @@ def app(db_path: Path) -> Iterator[Flask]:
 
 @pytest.fixture()
 def client(app: Flask) -> FlaskClient:
-    return app.test_client()
+    from tests.conftest import make_csrf_client
+    return make_csrf_client(app)
 
 
 def test_tools_page_lists_builtin_tools(client):
@@ -69,11 +70,10 @@ def test_tool_toggle_flips_enabled_flag(client, db_path):
     conn = get_connection(str(db_path))
     try:
         repo = ToolRepository(conn)
-        t = None
-        for cand in repo.list_enabled():
-            if cand.name == "delegate_subagent":
-                t = cand
-                break
+        # Toggle a genuinely enabled tool. ``delegate_subagent`` is kept in
+        # the catalog for visibility but is disabled until it has a real
+        # implementation.
+        t = next(iter(repo.list_enabled()), None)
         assert t is not None
         assert t.is_enabled is True
     finally:

@@ -18,10 +18,10 @@ import os
 import sqlite3
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple, cast
 
 from agent_workbench.models.harness_run import HarnessRunRepository
-from agent_workbench.models.tool import Tool
+from agent_workbench.models.tool import PERMISSION_CLASSES, Tool
 from agent_workbench.models.tool_invocation import (
     ToolInvocationRepository,
 )
@@ -35,6 +35,11 @@ ALLOWED_ADAPTER_METHODS = frozenset({
     "execute_shell",    # hermes
     "write_file",       # hermes
     "delegate_subagent",  # hermes (stub for now)
+})
+HERMES_ONLY_ADAPTER_METHODS = frozenset({
+    "execute_shell",
+    "write_file",
+    "delegate_subagent",
 })
 
 
@@ -56,6 +61,14 @@ class ToolDispatchError(Exception):
 
 class ToolDeniedError(ToolDispatchError):
     """Raised when a session policy denies a tool call."""
+
+
+class _SideEffectAdapter(Protocol):
+    """Dynamic adapter surface used by Hermes side-effect tools."""
+
+    def execute_shell(self, harness_run_id: str, command: str) -> Any: ...
+
+    def write_file(self, harness_run_id: str, path: str, data: str) -> str: ...
 
 
 @dataclass
@@ -135,11 +148,29 @@ class ToolDispatcher:
         *,
         session_id: str,
         workspace_id: str,
-        session_policy: List[str],
+        session_policy: Optional[List[str]],
         tool_call: Dict[str, Any],
         agent_harness_type: Optional[str] = None,
+        allowed_tool_names: Optional[List[str]] = None,
     ) -> DispatchResult:
-        """Execute one tool_call.  Returns a :class:`DispatchResult`."""
+        """Execute one tool_call.  Returns a :class:`DispatchResult`.
+
+        Parameters
+        ----------
+        session_policy:
+            The session's permission-class allow-list.  ``None`` means
+            no explicit policy (permissive default — all permission
+            classes allowed).  An explicit ``[]`` denies all permission
+            classes.
+        allowed_tool_names:
+            The exact namespaced tool names the provider was advertised.
+            When set, any tool_call whose namespaced name is not in this
+            list is denied — this prevents a provider from calling an
+            unadvertised or denied same-harness tool.
+            When ``None`` (default), all registered tools are allowed
+            (backward-compatible for trusted internal callers such as
+            replay/confirmed-tool paths).
+        """
         raw_name = tool_call.get("function", {}).get("name", "")
         raw_args = tool_call.get("function", {}).get("arguments", "{}")
         call_id = tool_call.get("id", "")
@@ -156,6 +187,16 @@ class ToolDispatcher:
                 reason=f"Malformed tool_call name: {raw_name!r}",
             )
 
+        # Enforce the exact negotiated tool set.
+        if allowed_tool_names is not None and raw_name not in allowed_tool_names:
+            return self._denied(
+                call_id, raw_name, harness_type, name,
+                reason=(
+                    f"Tool {raw_name!r} is not in the allowed tool set "
+                    f"negotiated for this agent"
+                ),
+            )
+
         tool = self._tool_repo.get_by_name(harness_type, name)
         if tool is None or not tool.is_enabled:
             return self._denied(
@@ -163,7 +204,13 @@ class ToolDispatcher:
                 reason=f"Tool {raw_name!r} is not registered or disabled",
             )
 
-        if tool.permission_class not in set(session_policy):
+        # ``None`` means no explicit policy (permissive default).
+        # An explicit ``[]`` denies all permission classes.
+        if session_policy is None:
+            policy: list[str] = list(PERMISSION_CLASSES)
+        else:
+            policy = session_policy
+        if tool.permission_class not in set(policy):
             return self._denied(
                 call_id, raw_name, harness_type, name,
                 reason=(
@@ -189,6 +236,25 @@ class ToolDispatcher:
                 workspace_id=workspace_id,
             )
 
+        if (
+            tool.adapter_method in HERMES_ONLY_ADAPTER_METHODS
+            and harness_type != "hermes"
+        ):
+            return self._denied(
+                call_id,
+                raw_name,
+                harness_type,
+                name,
+                reason=(
+                    f"Tool {raw_name!r} declares adapter_method "
+                    f"{tool.adapter_method!r}, which is only supported by "
+                    "the 'hermes' harness"
+                ),
+                tool=tool,
+                session_id=session_id,
+                workspace_id=workspace_id,
+            )
+
         # Cross-harness check: if the agent's configured harness is set
         # and differs from the tool's harness, we need user approval.
         # No-op when ``agent_harness_type`` is None (caller didn't tell
@@ -196,23 +262,35 @@ class ToolDispatcher:
         if (
             agent_harness_type
             and agent_harness_type != harness_type
-            and not self._cross_perms.is_allowed(
+        ):
+            # Check for a permanent grant first (takes precedence).
+            perm_allowed = self._cross_perms.is_allowed(
                 session_id=session_id,
                 agent_harness_type=agent_harness_type,
                 tool_harness_type=harness_type,
+                require_permanent=True,
             )
-        ):
-            return self._pending_confirmation(
-                call_id=call_id,
-                raw_name=raw_name,
-                harness_type=harness_type,
-                name=name,
-                tool=tool,
-                session_id=session_id,
-                workspace_id=workspace_id,
-                agent_harness_type=agent_harness_type,
-                raw_args=raw_args,
-            )
+            if not perm_allowed:
+                # Check for a once grant and consume it atomically.
+                once_consumed = self._cross_perms.consume_once(
+                    session_id=session_id,
+                    agent_harness_type=agent_harness_type,
+                    tool_harness_type=harness_type,
+                )
+                if not once_consumed:
+                    return self._pending_confirmation(
+                        call_id=call_id,
+                        raw_name=raw_name,
+                        harness_type=harness_type,
+                        name=name,
+                        tool=tool,
+                        session_id=session_id,
+                        workspace_id=workspace_id,
+                        agent_harness_type=agent_harness_type,
+                        raw_args=raw_args,
+                        session_policy=session_policy,
+                        allowed_tool_names=allowed_tool_names,
+                    )
 
         # Parse arguments as JSON.  If they fail, the call is malformed
         # from the provider's side and we mark it failed (not denied).
@@ -380,42 +458,44 @@ class ToolDispatcher:
 
             if tool.adapter_method == "execute_shell":
                 # Hermes: attach to an existing session, or auto-spawn one.
-                run_id = arguments.get("harness_run_id")
-                if not run_id:
+                side_effect_adapter = cast(_SideEffectAdapter, adapter)
+                run_id2: str | None = arguments.get("harness_run_id")
+                if not run_id2:
                     # Auto-spawn a Hermes session so the agent can use
                     # this tool without first having to start a session
                     # manually.  We give the session a benign bootstrap
                     # command; the real work follows in execute_shell.
-                    run_id = self._auto_spawn(
-                        adapter=adapter,
-                        session_id=session_id,
-                        bootstrap="true",  # cheap placeholder
-                    )
-                command = arguments.get("command", "")
-                try:
-                    transcript = adapter.execute_shell(run_id, command=command)
-                except Exception as exc:
-                    if tool.harness_type != "hermes" or not self._is_missing_hermes_session(exc):
-                        raise
-                    run_id = self._auto_spawn(
+                    run_id2 = self._auto_spawn(
                         adapter=adapter,
                         session_id=session_id,
                         bootstrap="true",
                     )
-                    transcript = adapter.execute_shell(run_id, command=command)
+                command = arguments.get("command", "")
+                try:
+                    transcript = side_effect_adapter.execute_shell(run_id2, command=command)
+                except Exception as exc:
+                    if tool.harness_type != "hermes" or not self._is_missing_hermes_session(exc):
+                        raise
+                    run_id2 = self._auto_spawn(
+                        adapter=adapter,
+                        session_id=session_id,
+                        bootstrap="true",
+                    )
+                    transcript = side_effect_adapter.execute_shell(run_id2, command=command)
                 payload = {
                     "ok": True,
-                    "harness_run_id": run_id,
+                    "harness_run_id": run_id2,
                     "stdout": (transcript.stdout or "").strip()[:4000],
                 }
-                self._link_invocation_to_run(run_id, invocation_id)
-                return json.dumps(payload, ensure_ascii=False), run_id, None
+                self._link_invocation_to_run(run_id2, invocation_id)
+                return json.dumps(payload, ensure_ascii=False), run_id2, None
 
             if tool.adapter_method == "write_file":
                 # Hermes: attach to an existing session, or auto-spawn one.
-                run_id = arguments.get("harness_run_id")
-                if not run_id:
-                    run_id = self._auto_spawn(
+                side_effect_adapter = cast(_SideEffectAdapter, adapter)
+                run_id3: str | None = arguments.get("harness_run_id")
+                if not run_id3:
+                    run_id3 = self._auto_spawn(
                         adapter=adapter,
                         session_id=session_id,
                         bootstrap="true",
@@ -429,23 +509,23 @@ class ToolDispatcher:
                         "missing path",
                     )
                 try:
-                    returned = adapter.write_file(run_id, path=path, data=data)
+                    returned = side_effect_adapter.write_file(run_id3, path=path, data=data)
                 except Exception as exc:
                     if tool.harness_type != "hermes" or not self._is_missing_hermes_session(exc):
                         raise
-                    run_id = self._auto_spawn(
+                    run_id3 = self._auto_spawn(
                         adapter=adapter,
                         session_id=session_id,
                         bootstrap="true",
                     )
-                    returned = adapter.write_file(run_id, path=path, data=data)
+                    returned = side_effect_adapter.write_file(run_id3, path=path, data=data)
                 payload = {
                     "ok": True,
-                    "harness_run_id": run_id,
+                    "harness_run_id": run_id3,
                     "path": returned,
                 }
-                self._link_invocation_to_run(run_id, invocation_id)
-                return json.dumps(payload, ensure_ascii=False), run_id, None
+                self._link_invocation_to_run(run_id3, invocation_id)
+                return json.dumps(payload, ensure_ascii=False), run_id3, None
 
             if tool.adapter_method == "delegate_subagent":
                 # Hermes stub: we *do not* fake this.  Return a precise
@@ -576,12 +656,19 @@ class ToolDispatcher:
         workspace_id: str,
         agent_harness_type: str,
         raw_args: Any = None,
+        session_policy: Optional[List[str]] = None,
+        allowed_tool_names: Optional[List[str]] = None,
     ) -> DispatchResult:
         """Create a pending-confirmation invocation and return a stub result.
 
         The caller is responsible for posting a confirmation message
         to the channel (this method does NOT do that — it only persists
         the invocation so the UI can find it).
+
+        Stores the exact confirmation context (agent_harness_type,
+        session_policy preserving None vs [], allowed_tool_names
+        preserving None vs []) so the confirmation POST can redispatch
+        using only stored context.
         """
         # Best-effort parse so we can store the arguments for later
         # replay.  Malformed JSON just means we replay with empty
@@ -600,6 +687,21 @@ class ToolDispatcher:
             f"Tool {raw_name!r} is outside the agent's configured "
             f"harness {agent_harness_type!r}; user must confirm."
         )
+
+        # Build the confirmation context dict, preserving None vs []
+        # for session_policy and allowed_tool_names.
+        confirmation_context: Dict[str, Any] = {
+            "agent_harness_type": agent_harness_type,
+        }
+        if session_policy is not None:
+            confirmation_context["session_policy"] = session_policy
+        else:
+            confirmation_context["session_policy"] = None
+        if allowed_tool_names is not None:
+            confirmation_context["allowed_tool_names"] = allowed_tool_names
+        else:
+            confirmation_context["allowed_tool_names"] = None
+
         inv = self._invocations.create(
             session_id=session_id,
             workspace_id=workspace_id,
@@ -610,6 +712,7 @@ class ToolDispatcher:
             status="pending_confirmation",
             requires_confirmation=True,
             confirmation_reason=reason,
+            confirmation_context=confirmation_context,
         )
         return DispatchResult(
             tool_call_id=call_id,

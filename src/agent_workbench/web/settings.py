@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
 
-from agent_workbench.models.agent_profile_binding import AgentProfileBindingRepository
 from agent_workbench.models.tool import ToolRepository
 from agent_workbench.services.profile_service import ProfileNotFoundError, ProfileService
 from agent_workbench.services.provider_service import (
@@ -71,7 +70,7 @@ def _profile_service() -> ProfileService:
     return ProfileService(get_db())
 
 
-def _latest_profiles_by_name() -> List[object]:
+def _latest_profiles_by_name() -> Sequence[object]:
     return ProfileService(get_db()).list_latest_profiles()
 
 
@@ -318,7 +317,6 @@ def delete_role(role_id: str):
 
 @bp.route("/agents", methods=["GET"])
 def agents_page():
-    profile_service = _profile_service()
     provider_service = _provider_service()
     role_service = _role_service()
     return render_template(

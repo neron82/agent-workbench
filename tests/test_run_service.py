@@ -6,7 +6,6 @@ web-layer integration is covered by ``test_runs_start_endpoint.py``.
 from __future__ import annotations
 
 import sqlite3
-import textwrap
 
 import pytest
 
@@ -17,7 +16,6 @@ from agent_workbench.models.workspace import WorkspaceRepository
 from agent_workbench.services.run_service import (
     DISABLED_HARNESS_TYPES,
     HarnessUnavailableError,
-    LIVE_HARNESS_TYPES,
     RunService,
     TaskSpecGateError,
 )

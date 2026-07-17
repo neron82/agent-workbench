@@ -37,13 +37,13 @@ Invariants asserted across the suite (per task description):
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
-from agent_workbench.db import apply_migrations, get_connection
+from agent_workbench.db import get_connection
 from agent_workbench.models.artifact import ArtifactRepository
 from agent_workbench.models.fork_record import ForkRecordRepository
 from agent_workbench.models.harness_run import HarnessRunRepository
@@ -84,7 +84,8 @@ def app(db, tmp_db) -> Flask:
 
 @pytest.fixture
 def client(app: Flask) -> FlaskClient:
-    return app.test_client()
+    from tests.conftest import make_csrf_client
+    return make_csrf_client(app)
 
 
 @pytest.fixture
@@ -887,7 +888,7 @@ class TestMainJourneyEndToEnd:
 
         # Step 7: add artifact + review evidence.
         artifact_repo = ArtifactRepository(db)
-        artifact = artifact_repo.create(
+        artifact_repo.create(
             workspace_id=workspace_id,
             producer_session_id=work_id,
             producer_harness_run_id=run.harness_run_id,

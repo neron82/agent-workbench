@@ -6,6 +6,7 @@
 <div class="panel">
   <h2>Neue Rolle anlegen</h2>
   <form method="post" action="{{ url_for('settings.create_role') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-row">
       <label>Name</label>
       <input type="text" name="name" required>
@@ -24,6 +25,7 @@
   <div class="panel">
     <h2>{{ role.name }} {% if role.is_builtin %}<span class="pill">builtin</span>{% endif %}</h2>
     <form method="post" action="{{ url_for('settings.update_role', role_id=role.role_id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-row">
         <label>Name</label>
         <input type="text" name="name" value="{{ role.name }}" required>
@@ -38,6 +40,7 @@
     </form>
     {% if not role.is_builtin %}
       <form method="post" action="{{ url_for('settings.delete_role', role_id=role.role_id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="secondary">Rolle löschen</button>
       </form>
     {% else %}

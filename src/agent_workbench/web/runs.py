@@ -45,7 +45,6 @@ from agent_workbench.adapters.base import (
     AdapterCapabilities,
     BaseAdapter,
     HarnessNotReadyError,
-    HarnessProcessError,
 )
 # Import the registry shim from the adapters package itself.  This
 # avoids a circular import with ``services.run_service`` (which also

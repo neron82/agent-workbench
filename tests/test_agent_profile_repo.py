@@ -2,7 +2,7 @@
 
 import sqlite3
 
-from agent_workbench.models.agent_profile import AgentProfile, AgentProfileRepository
+from agent_workbench.models.agent_profile import AgentProfileRepository
 
 
 def test_create_and_get_by_id(db: sqlite3.Connection):
@@ -104,7 +104,7 @@ def test_get_by_name(db: sqlite3.Connection):
     repo.create(name="coder", model_ref="gpt-4")
     repo.create(name="reviewer", model_ref="claude")
     # Create a v2 of "coder"
-    v1 = repo.create(name="coder", model_ref="gpt-4o")
+    repo.create(name="coder", model_ref="gpt-4o")
 
     results = repo.get_by_name("coder")
     assert len(results) == 2

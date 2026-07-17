@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 import time
 
 import pytest
@@ -52,7 +51,6 @@ def test_transcript_survives_connection_close(app, db_path, tmp_path, monkeypatc
 
     # 2. Reopen the database from a fresh Flask app context (simulates a restart).
     with app.app_context():
-        from agent_workbench.web.runs import _load_transcript
         c2 = get_connection(str(db_path))
         run = HarnessRunRepository(c2).get_by_id(rid)
         assert run is not None

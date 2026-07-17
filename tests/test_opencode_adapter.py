@@ -1,13 +1,11 @@
 """Tests for OpencodeAdapter."""
 
-import sqlite3
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from agent_workbench.adapters.opencode import OpencodeAdapter
 from agent_workbench.adapters.base import (
-    AdapterCapabilities,
     HarnessNotReadyError,
     RuntimeIds,
     Transcript,

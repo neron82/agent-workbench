@@ -1,65 +1,45 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>New TaskSpec — session {{ session.session_id }}</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.4rem; }
-    label { font-weight: 600; display: block; margin-top: 1rem; }
-    input[type=text], textarea {
-      width: 100%; padding: 0.5rem; font-size: 1rem;
-      font-family: ui-monospace, monospace; box-sizing: border-box;
-    }
-    textarea { min-height: 6rem; }
-    .actions { margin: 1.5rem 0; }
-    button {
-      padding: 0.5rem 1rem; border: 1px solid #999; border-radius: 4px;
-      background: #fafafa; cursor: pointer; font-size: 1rem;
-    }
-    .meta { color: #555; font-size: 0.9rem; }
-    .help { color: #555; font-size: 0.85rem; font-weight: 400; }
-  </style>
-</head>
-<body>
-  <h1>New TaskSpec</h1>
-  <p class="meta">
-    From session <code>{{ session.session_id }}</code>
-    (type={{ session.session_type }})
-  </p>
+{% extends "base.html" %}
+{% block title %}New TaskSpec — session {{ session.session_id }}{% endblock %}
 
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-      <ul class="flashes">
-        {% for category, msg in messages %}
-          <li class="flash {{ category }}">{{ msg }}</li>
-        {% endfor %}
-      </ul>
-    {% endif %}
-  {% endwith %}
+{% block content %}
+<h1>New TaskSpec</h1>
+<p class="muted">
+  From session <code>{{ session.session_id }}</code>
+  (type={{ session.session_type }})
+</p>
 
-  <form method="post" action="{{ url_for('task_specs.create_from_session', session_id=session.session_id) }}">
-    <label for="objective">Objective <span class="help">(required)</span></label>
-    <textarea name="objective" id="objective" required data-testid="objective"></textarea>
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    <ul class="flashes">
+      {% for category, msg in messages %}
+        <li class="flash {{ category }}">{{ msg }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+{% endwith %}
 
-    <label for="risk_level">Risk level</label>
-    <input type="text" name="risk_level" id="risk_level" placeholder="low | medium | high" />
+<form method="post" action="{{ url_for('task_specs.create_from_session', session_id=session.session_id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label for="objective">Objective <span class="help" style="color:var(--ink-muted); font-size:0.85rem; font-weight:400;">(required)</span></label>
+  <textarea name="objective" id="objective" required data-testid="objective"></textarea>
 
-    <label for="scope_in_json">Scope (in) <span class="help">JSON object or empty</span></label>
-    <textarea name="scope_in_json" id="scope_in_json" placeholder='{"paths": ["src/"]}'></textarea>
+  <label for="risk_level">Risk level</label>
+  <input type="text" name="risk_level" id="risk_level" placeholder="low | medium | high" />
 
-    <label for="scope_out_json">Scope (out) <span class="help">JSON object or empty</span></label>
-    <textarea name="scope_out_json" id="scope_out_json" placeholder='{"paths": ["tests/"]}'></textarea>
+  <label for="scope_in_json">Scope (in) <span class="help" style="color:var(--ink-muted); font-size:0.85rem; font-weight:400;">JSON object or empty</span></label>
+  <textarea name="scope_in_json" id="scope_in_json" placeholder='{"paths": ["src/"]}'></textarea>
 
-    <label for="acceptance_criteria_json">Acceptance criteria <span class="help">JSON object or empty</span></label>
-    <textarea name="acceptance_criteria_json" id="acceptance_criteria_json" placeholder='{"must_pass": ["unit tests"]}'></textarea>
+  <label for="scope_out_json">Scope (out) <span class="help" style="color:var(--ink-muted); font-size:0.85rem; font-weight:400;">JSON object or empty</span></label>
+  <textarea name="scope_out_json" id="scope_out_json" placeholder='{"paths": ["tests/"]}'></textarea>
 
-    <label for="constraints_json">Constraints <span class="help">JSON object or empty</span></label>
-    <textarea name="constraints_json" id="constraints_json" placeholder='{"timeout_s": 300}'></textarea>
+  <label for="acceptance_criteria_json">Acceptance criteria <span class="help" style="color:var(--ink-muted); font-size:0.85rem; font-weight:400;">JSON object or empty</span></label>
+  <textarea name="acceptance_criteria_json" id="acceptance_criteria_json" placeholder='{"must_pass": ["unit tests"]}'></textarea>
 
-    <div class="actions">
-      <button type="submit" data-testid="submit-btn">Create TaskSpec</button>
-    </div>
-  </form>
-</body>
-</html>
+  <label for="constraints_json">Constraints <span class="help" style="color:var(--ink-muted); font-size:0.85rem; font-weight:400;">JSON object or empty</span></label>
+  <textarea name="constraints_json" id="constraints_json" placeholder='{"timeout_s": 300}'></textarea>
+
+  <div class="actions" style="margin:1.5rem 0;">
+    <button type="submit" class="btn btn-primary" data-testid="submit-btn">Create TaskSpec</button>
+  </div>
+</form>
+{% endblock %}

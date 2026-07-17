@@ -4,10 +4,14 @@ Exercises the ``channels`` and ``sessions`` blueprints through Flask's
 ``test_client`` against a real, migrated SQLite database. The DB path
 is parameterised by a session-scoped fixture so the suite uses one
 fresh database per test session.
+
+CSRF tokens are auto-injected by the ``client`` fixture so existing
+route tests pass through enabled CSRF protection without modification.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Iterator
 
@@ -16,8 +20,22 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from agent_workbench.db import apply_migrations, get_connection
+from agent_workbench.models.routed_message import RoutedMessageRepository
+from agent_workbench.models.channel import ChannelRepository
+from agent_workbench.models.session_extension import SessionExtensionRepository
 from agent_workbench.models.workspace import WorkspaceRepository
 from agent_workbench.web import create_app
+
+
+def _extract_csrf_token(html: bytes) -> str:
+    """Extract the CSRF token from a rendered page's meta tag."""
+    match = re.search(
+        rb'<meta\s+name="csrf-token"\s+content="([^"]+)"',
+        html,
+    )
+    if not match:
+        raise AssertionError("No csrf-token meta tag found in response")
+    return match.group(1).decode("utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -57,8 +75,45 @@ def app(app_db_path: Path) -> Iterator[Flask]:
 
 @pytest.fixture()
 def client(app: Flask) -> FlaskClient:
-    """Flask test client wired to the app fixture above."""
-    return app.test_client()
+    """Flask test client wired to the app fixture above.
+
+    Auto-injects a valid CSRF token into every unsafe request so
+    existing route tests pass through enabled CSRF protection.
+    """
+    client = app.test_client()
+
+    # Seed the session with a CSRF token via a GET request.
+    resp = client.get("/")
+    assert resp.status_code == 200
+    token = _extract_csrf_token(resp.data)
+
+    original_open = client.open
+
+    def _patched_open(*args, **kwargs):
+        method = kwargs.get("method", "GET")
+        if method in ("POST", "PUT", "DELETE", "PATCH"):
+            data = kwargs.get("data")
+            json_data = kwargs.get("json")
+            headers = dict(kwargs.get("headers", {}))
+
+            if json_data is not None:
+                headers.setdefault("X-CSRF-Token", token)
+                kwargs["headers"] = headers
+            elif data is not None and isinstance(data, dict):
+                data = dict(data)
+                data.setdefault("csrf_token", token)
+                kwargs["data"] = data
+            elif data is not None and not isinstance(data, dict):
+                headers.setdefault("X-CSRF-Token", token)
+                kwargs["headers"] = headers
+            else:
+                kwargs["data"] = {"csrf_token": token}
+                headers.setdefault("X-CSRF-Token", token)
+                kwargs["headers"] = headers
+        return original_open(*args, **kwargs)
+
+    client.open = _patched_open  # type: ignore[method-assign]
+    return client
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +362,6 @@ def _create_channel_with_session(
     """Helper: create a channel with a starter session, return (channel_id, session_id)."""
     from agent_workbench.db import get_connection
     from agent_workbench.models.channel import ChannelRepository
-    from agent_workbench.models.session_extension import SessionExtensionRepository
 
     create = client.post(
         "/channels",
@@ -365,6 +419,8 @@ class TestPostMessage:
             follow_redirects=False,
         )
         assert resp.status_code == 302
+        with client.session_transaction() as browser_session:
+            expected_user_id = browser_session["workbench_user_id"]
 
         # The routing service should now have one message on this session.
         db_path = client.application.config["WORKBENCH_DB_PATH"]
@@ -375,7 +431,7 @@ class TestPostMessage:
             assert len(messages) == 1
             m = messages[0]
             assert m.source_type == "user"
-            assert m.source_id == "tester"
+            assert m.source_id == expected_user_id
             assert m.target_type == "orchestrator"
             assert m.target_id == "@orchestrator"
             assert m.message_kind == "conversation"
@@ -434,3 +490,70 @@ class TestUpdateStatus:
             data={"status": "bogus"},
         )
         assert resp.status_code == 400
+
+
+def _seed_browser_session(db_path: str, workspace_id: str, title: str, body: str):
+    conn = get_connection(db_path)
+    try:
+        channel = ChannelRepository(conn).create(
+            workspace_id=workspace_id, channel_kind="chat", title=title,
+        )
+        session = SessionExtensionRepository(conn).create(
+            workspace_id=workspace_id, session_type="chat", title=title,
+        )
+        ChannelRepository(conn).update_active_session(
+            channel.channel_id, active_session_id=session.session_id,
+        )
+        RoutedMessageRepository(conn).create(
+            workspace_id=workspace_id,
+            channel_id=channel.channel_id,
+            session_id=session.session_id,
+            source_type="user",
+            source_id="user",
+            target_type="orchestrator",
+            target_id="@orchestrator",
+            message_kind="conversation",
+            payload_ref='{"body": "' + body + '"}',
+        )
+        return session.session_id
+    finally:
+        conn.close()
+
+
+class TestWorkspaceDashboard:
+    def test_create_workspace_is_visible_in_switcher(self, client: FlaskClient):
+        response = client.post(
+            "/workspaces", data={"name": "Client Alpha"}, follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert b"Client Alpha" in response.data
+        assert b"Workspace" in response.data
+
+    def test_dashboard_searches_message_content_with_workspace_scope(
+        self, client: FlaskClient, workspace_id: str
+    ):
+        db_path = client.application.config["WORKBENCH_DB_PATH"]
+        matching_id = _seed_browser_session(
+            db_path, workspace_id, "Investigation", "needle in the transcript",
+        )
+        _seed_browser_session(db_path, workspace_id, "Unrelated", "other content")
+
+        conn = get_connection(db_path)
+        try:
+            other = WorkspaceRepository(conn).create(
+                tenant_id="t2", name="Other Workspace",
+            )
+        finally:
+            conn.close()
+        _seed_browser_session(db_path, other.workspace_id, "Leak", "needle elsewhere")
+
+        response = client.get(
+            f"/?workspace_id={workspace_id}&q=needle&view=table",
+        )
+        body = response.data.decode("utf-8")
+        assert response.status_code == 200
+        assert matching_id in body
+        assert "Investigation" in body
+        assert "Unrelated" not in body
+        assert "Leak" not in body
+        assert "Session browser" in body

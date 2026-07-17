@@ -18,11 +18,14 @@ open http://127.0.0.1:5000
 ## Features
 
 - **Multi-agent chat** — add multiple agents to a session, each with their own provider, model, role, and tool harness
+- **Workspace and channel organization** — group typed sessions, teams, labels, and assets by workspace
+- **Reusable agent teams** — bind configured agents to sessions and transfer participants between sessions
 - **Typed sessions** — Chat (5 tool iterations), Research (10), Work (25) — configurable per session
 - **Tool harnesses** — shell commands, Hermes agent sessions, file I/O, SSH, OpenCode
 - **Live work visualization** — see what each agent is doing in real time, inspect tool calls and results, stop runaway agents
 - **Provider presets** — OpenAI, Ollama Cloud, or any OpenAI-compatible endpoint with API key validation and model discovery
-- **Session management** — create, rename, configure, and delete sessions with full data cascade
+- **Session operations** — create, rename, configure, export, upload files, page long histories, and delete with a full data cascade
+- **Operational safeguards** — CSRF protection, local identity, negotiated tool permissions, health/readiness endpoints, and bounded live payloads
 - **Dark theme** — built for extended use
 
 ## Architecture
@@ -30,18 +33,18 @@ open http://127.0.0.1:5000
 ```
 ┌─────────────────────────────────────────────┐
 │                  Web UI (Flask)              │
-│  Landing · Session List · Chat · Settings    │
+│  Workspaces · Channels · Sessions · Settings │
 ├─────────────────────────────────────────────┤
 │              Services Layer                  │
 │  AgentRuntime · ToolRegistry · Routing       │
-│  SessionService · ProfileService · Fork      │
+│  SessionService · Teams · Assets · Identity  │
 ├─────────────────────────────────────────────┤
 │              Adapter Layer                    │
 │  Shell · Hermes · OpenCode · SSH · Discussion│
 ├─────────────────────────────────────────────┤
 │              Data Layer (SQLite)              │
 │  Sessions · Providers · Profiles · Tools     │
-│  Messages · Invocations · Runs · Forks       │
+│  Messages · Invocations · Runs · Teams       │
 └─────────────────────────────────────────────┘
 ```
 
@@ -85,13 +88,13 @@ WORKBENCH_ENV=development ./start_workbench.sh
 src/agent_workbench/
 ├── adapters/          # Harness adapters (shell, hermes, opencode, ssh)
 ├── db/                # Database connection + migrations
-│   └── migrations/    # Versioned schema migrations (001-009)
+│   └── migrations/    # Versioned schema migrations (001-016)
 ├── models/            # SQLAlchemy-free dataclass models + repositories
 ├── services/          # Business logic (runtime, routing, sessions, tools)
 └── web/               # Flask blueprints + Jinja2 templates
     └── templates/     # HTML templates (dark theme)
 documentation/         # Specs, architecture docs, implementation plans
-tests/                # pytest test suite (770+ tests)
+tests/                # pytest test suite (1,180+ tests)
 ```
 
 ## Documentation

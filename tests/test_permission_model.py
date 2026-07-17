@@ -8,7 +8,6 @@ import pytest
 from agent_workbench.adapters.permission import PermissionModel
 from agent_workbench.models.permission_request import (
     PermissionRequest,
-    PermissionRequestRepository,
 )
 
 

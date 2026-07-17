@@ -1,9 +1,8 @@
 """Tests for ForkRecordRepository."""
 
-import json
 import sqlite3
 
-from agent_workbench.models.fork_record import ForkRecord, ForkRecordRepository
+from agent_workbench.models.fork_record import ForkRecordRepository
 
 
 def test_create_and_get_by_id(db: sqlite3.Connection):

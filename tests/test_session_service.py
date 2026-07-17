@@ -1,5 +1,8 @@
 """Tests for SessionService."""
 
+import sqlite3
+import uuid
+
 import pytest
 
 from agent_workbench.models.channel import ChannelRepository
@@ -271,6 +274,182 @@ class TestTransitionSessionType:
             fork_reason="needs work",
         )
         assert child.task_spec_id == task_spec_id
+
+
+class TestDeleteSession:
+    """Regression: delete_session must delete tool_invocations before
+    harness_runs to satisfy FK ordering (tool_invocations.harness_run_id
+    → harness_runs with NO ACTION on delete)."""
+
+    def _seed_harness_run_with_tool_invocation(
+        self, db: sqlite3.Connection, session_id: str, workspace_id: str,
+    ) -> str:
+        """Create a harness_run + tool_invocation for the session.
+        Returns the harness_run_id."""
+        hrun_id = uuid.uuid4().hex
+        db.execute(
+            "INSERT INTO harness_runs "
+            "(harness_run_id, workspace_id, session_id, harness_type) "
+            "VALUES (?, ?, ?, 'hermes')",
+            (hrun_id, workspace_id, session_id),
+        )
+        # Get a real tool_id from the seeded tools
+        tool_row = db.execute(
+            "SELECT tool_id FROM tools WHERE is_builtin = 1 LIMIT 1"
+        ).fetchone()
+        assert tool_row is not None, "No seeded tools found"
+        tool_id = tool_row["tool_id"]
+        inv_id = uuid.uuid4().hex
+        db.execute(
+            "INSERT INTO tool_invocations "
+            "(invocation_id, session_id, workspace_id, tool_id, tool_name, "
+            "tool_harness_type, arguments_json, status, harness_run_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                inv_id, session_id, workspace_id, tool_id, "test_tool",
+                "hermes", "{}", "completed", hrun_id, 1000.0,
+            ),
+        )
+        db.commit()
+        return hrun_id
+
+    def test_delete_session_with_harness_run_and_tool_invocation(
+        self, svc, db, workspace_id,
+    ):
+        """RED: delete_session must not raise IntegrityError when
+        tool_invocations reference harness_runs."""
+        session = svc.create_session(
+            workspace_id=workspace_id, session_type="chat",
+        )
+        sid = session.session_id
+        hrid = self._seed_harness_run_with_tool_invocation(db, sid, workspace_id)
+
+        # Verify data exists
+        hrun = db.execute(
+            "SELECT * FROM harness_runs WHERE harness_run_id = ?", (hrid,)
+        ).fetchone()
+        assert hrun is not None
+        inv = db.execute(
+            "SELECT * FROM tool_invocations WHERE session_id = ?", (sid,)
+        ).fetchone()
+        assert inv is not None
+        assert inv["harness_run_id"] == hrid
+
+        # This must not raise IntegrityError
+        svc.delete_session(sid)
+
+        # Verify everything is gone
+        assert db.execute(
+            "SELECT COUNT(*) FROM harness_runs WHERE session_id = ?", (sid,)
+        ).fetchone()[0] == 0
+        assert db.execute(
+            "SELECT COUNT(*) FROM tool_invocations WHERE session_id = ?", (sid,)
+        ).fetchone()[0] == 0
+        assert db.execute(
+            "SELECT COUNT(*) FROM session_extensions WHERE session_id = ?", (sid,)
+        ).fetchone()[0] == 0
+
+    def test_delete_session_with_harness_children_and_tool_invocation(
+        self, svc, db, workspace_id,
+    ):
+        """GREEN: delete_session handles all harness children + tool_invocations."""
+        session = svc.create_session(
+            workspace_id=workspace_id, session_type="chat",
+        )
+        sid = session.session_id
+        hrid = self._seed_harness_run_with_tool_invocation(db, sid, workspace_id)
+
+        # Add harness_events, harness_transcripts, permission_requests
+        db.execute(
+            "INSERT INTO harness_events (event_id, harness_run_id, event_type, "
+            "detail_json, created_at) VALUES (?, ?, ?, ?, ?)",
+            (uuid.uuid4().hex, hrid, "start", "{}", 1001.0),
+        )
+        db.execute(
+            "INSERT INTO harness_transcripts (transcript_id, harness_run_id, "
+            "line_no, stream, content, captured_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (uuid.uuid4().hex, hrid, 1, "stdout", "hello", 1002.0),
+        )
+        db.execute(
+            "INSERT INTO permission_requests (permission_request_id, harness_run_id, "
+            "scope, reason, requested_action, requested_by) VALUES (?, ?, ?, ?, ?, ?)",
+            (uuid.uuid4().hex, hrid, "tool", "needed", "run_command", "agent"),
+        )
+        db.commit()
+
+        svc.delete_session(sid)
+
+        assert db.execute(
+            "SELECT COUNT(*) FROM harness_runs WHERE session_id = ?", (sid,)
+        ).fetchone()[0] == 0
+        assert db.execute(
+            "SELECT COUNT(*) FROM tool_invocations WHERE session_id = ?", (sid,)
+        ).fetchone()[0] == 0
+        assert db.execute(
+            "SELECT COUNT(*) FROM harness_events WHERE harness_run_id = ?", (hrid,)
+        ).fetchone()[0] == 0
+        assert db.execute(
+            "SELECT COUNT(*) FROM harness_transcripts WHERE harness_run_id = ?", (hrid,)
+        ).fetchone()[0] == 0
+        assert db.execute(
+            "SELECT COUNT(*) FROM permission_requests WHERE harness_run_id = ?", (hrid,)
+        ).fetchone()[0] == 0
+
+    def test_delete_session_with_routed_messages_and_event_records(
+        self, svc, db, workspace_id,
+    ):
+        """GREEN: event_records.routed_message_id is NULLed before
+        routed_messages are deleted."""
+        session = svc.create_session(
+            workspace_id=workspace_id, session_type="chat",
+        )
+        sid = session.session_id
+        hrid = self._seed_harness_run_with_tool_invocation(db, sid, workspace_id)
+
+        # Create a channel for routed_messages FK
+        ch_id = uuid.uuid4().hex
+        db.execute(
+            "INSERT INTO channels (channel_id, workspace_id, channel_kind, title) "
+            "VALUES (?, ?, 'chat', 'test')",
+            (ch_id, workspace_id),
+        )
+        # Create a routed_message
+        rm_id = uuid.uuid4().hex
+        db.execute(
+            "INSERT INTO routed_messages "
+            "(routed_message_id, workspace_id, session_id, channel_id, "
+            "source_type, source_id, target_type, target_id, message_kind) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'conversation')",
+            (rm_id, workspace_id, sid, ch_id, "user", "u1", "agent", "a1"),
+        )
+        # Create an event_record referencing both harness_run and routed_message
+        ev_id = uuid.uuid4().hex
+        db.execute(
+            "INSERT INTO event_records "
+            "(event_id, harness_run_id, routed_message_id, event_type, "
+            "event_source, event_ts) VALUES (?, ?, ?, ?, ?, ?)",
+            (ev_id, hrid, rm_id, "message", "agent", 1003.0),
+        )
+        db.commit()
+
+        svc.delete_session(sid)
+
+        assert db.execute(
+            "SELECT COUNT(*) FROM harness_runs WHERE session_id = ?", (sid,)
+        ).fetchone()[0] == 0
+        assert db.execute(
+            "SELECT COUNT(*) FROM tool_invocations WHERE session_id = ?", (sid,)
+        ).fetchone()[0] == 0
+        assert db.execute(
+            "SELECT COUNT(*) FROM routed_messages WHERE session_id = ?", (sid,)
+        ).fetchone()[0] == 0
+        # event_records should have NULLed routed_message_id and harness_run_id
+        ev = db.execute(
+            "SELECT * FROM event_records WHERE event_id = ?", (ev_id,)
+        ).fetchone()
+        assert ev is not None, "event_record should survive (no FK to session)"
+        assert ev["harness_run_id"] is None
+        assert ev["routed_message_id"] is None
 
 
 class TestTypeImmutability:

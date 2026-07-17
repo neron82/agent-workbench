@@ -33,7 +33,8 @@ def app(db, tmp_db):
 
 @pytest.fixture
 def client(app):
-    return app.test_client()
+    from tests.conftest import make_csrf_client
+    return make_csrf_client(app)
 
 
 @pytest.fixture

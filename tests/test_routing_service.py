@@ -10,7 +10,6 @@ from agent_workbench.models.harness_run import HarnessRunRepository
 from agent_workbench.models.routed_message import RoutedMessage
 from agent_workbench.models.workspace import WorkspaceRepository
 from agent_workbench.services.routing_service import (
-    SOURCE_TYPE_AGENT,
     SOURCE_TYPE_ORCHESTRATOR,
     SOURCE_TYPE_USER,
     SOURCE_TYPE_WORKER,

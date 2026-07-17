@@ -33,7 +33,6 @@ from agent_workbench.web.bubble_helpers import (
     bubble_role,
     bubble_time,
 )
-from agent_workbench.web.messages import visible_messages_for_session
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +72,8 @@ def app(app_db_path: str) -> Iterator[Flask]:
 
 @pytest.fixture()
 def client(app: Flask) -> FlaskClient:
-    return app.test_client()
+    from tests.conftest import make_csrf_client
+    return make_csrf_client(app)
 
 
 def _create_session_with_channel(
@@ -253,8 +253,8 @@ class TestBubbleRender:
         assert 'class="message from-user"' not in body
         # Avatar with the user initial.
         assert "msg-avatar-user" in body
-        # The display name comes from source_id for users.
-        assert "tester" in body
+        # Browser identity is authoritative; posted source ids are ignored.
+        assert "You" in body
 
     def test_message_row_renders_agent_bubble(
         self, app: Flask, client: FlaskClient, workspace_id: str
@@ -265,7 +265,6 @@ class TestBubbleRender:
         from agent_workbench.models.channel import ChannelRepository
         from agent_workbench.models.session_extension import SessionExtensionRepository
         from agent_workbench.services.routing_service import (
-            RoutingService,
             SOURCE_TYPE_AGENT,
             TARGET_TYPE_AGENT,
         )
@@ -305,7 +304,6 @@ class TestBubbleRender:
         from agent_workbench.models.channel import ChannelRepository
         from agent_workbench.models.session_extension import SessionExtensionRepository
         from agent_workbench.services.routing_service import (
-            RoutingService,
             SOURCE_TYPE_ORCHESTRATOR,
             TARGET_TYPE_AGENT,
         )

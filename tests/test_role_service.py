@@ -5,7 +5,6 @@ import pytest
 from agent_workbench.services.profile_service import ProfileService
 from agent_workbench.services.role_service import (
     RoleInUseError,
-    RoleNotFoundError,
     RoleService,
 )
 

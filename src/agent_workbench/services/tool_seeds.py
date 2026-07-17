@@ -14,11 +14,12 @@ Why seeded this way instead of as a static Python list?
 from __future__ import annotations
 
 import sqlite3
+from typing import Any
 
 from agent_workbench.models.tool import ToolRepository
 
 
-BUILTIN_TOOLS = (
+BUILTIN_TOOLS: tuple[dict[str, Any], ...] = (
     # shell harness
     {
         "name": "run_command",
@@ -65,6 +66,7 @@ BUILTIN_TOOLS = (
             "required": ["task"],
         },
         "permission_class": "read_only",
+        "is_enabled": False,  # disabled by default — not yet implemented
     },
     {
         "name": "run_command",
@@ -144,7 +146,7 @@ def seed_builtin_tools(conn: sqlite3.Connection) -> int:
             description=spec["description"],
             input_schema=spec["input_schema"],
             permission_class=spec["permission_class"],
-            is_enabled=True,
+            is_enabled=spec.get("is_enabled", True),
             is_builtin=True,
         )
         inserted += 1

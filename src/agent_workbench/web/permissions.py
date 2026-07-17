@@ -18,7 +18,7 @@ confirmation even when lower layers are auto-approve capable).
 
 from __future__ import annotations
 
-from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
+from flask import Blueprint, abort, flash, redirect, render_template, url_for
 
 from agent_workbench.models.permission_request import PermissionRequestRepository
 from agent_workbench.web.app import get_db

@@ -27,7 +27,7 @@ from typing import Any, Dict, Optional
 
 from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
 
-from agent_workbench.models.replay_record import ReplayRecord, ReplayRecordRepository
+from agent_workbench.models.replay_record import ReplayRecordRepository
 from agent_workbench.models.review_record import ReviewRecordRepository
 from agent_workbench.web.app import get_db
 

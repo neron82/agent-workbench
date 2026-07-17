@@ -35,6 +35,7 @@
         <td><span class="muted">{{ t.description[:80] }}{% if t.description|length > 80 %}…{% endif %}</span></td>
         <td>
           <form method="post" action="{{ url_for('settings.tool_toggle', tool_id=t.tool_id) }}" class="inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="secondary" data-testid="tool-toggle">
               {% if t.is_enabled %}aktiv{% else %}inaktiv{% endif %}
             </button>

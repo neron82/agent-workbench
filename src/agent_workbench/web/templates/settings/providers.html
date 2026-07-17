@@ -23,6 +23,7 @@
     </div>
 
     <form method="post" action="{{ url_for('settings.create_provider') }}" id="create-provider-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-row">
         <label>Name</label>
         <input type="text" name="name" id="new-name" required>
@@ -72,6 +73,7 @@
         <span class="muted" style="font-size:11px;">{{ provider.provider_id[:12] }}…</span>
       </div>
       <form method="post" action="{{ url_for('settings.update_provider', provider_id=provider.provider_id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
           <label>Name</label>
           <input type="text" name="name" value="{{ provider.name }}" required>
@@ -158,7 +160,7 @@
 
     fetch('{{ url_for("settings.test_and_fetch_models") }}', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() },
       body: JSON.stringify({
         endpoint_url: endpoint,
         api_key: apiKey,

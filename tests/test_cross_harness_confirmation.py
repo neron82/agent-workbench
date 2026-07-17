@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from agent_workbench.models.channel import ChannelRepository
 from agent_workbench.models.cross_harness_permission import (

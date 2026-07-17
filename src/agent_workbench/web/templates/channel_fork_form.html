@@ -8,7 +8,7 @@
 
 <h1>Fork channel</h1>
 
-<div class="panel">
+<div class="card">
   <p class="muted">
     Forks create a new child session of the chosen type. The current active
     session on this channel (if any) is the parent. Type changes always go
@@ -16,6 +16,7 @@
     as the new active session.
   </p>
   <form method="post" action="{{ url_for('channels.fork_channel', channel_id=channel.channel_id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-row">
       <label for="new_session_type">New session type</label>
       <select id="new_session_type" name="new_session_type">
@@ -36,7 +37,7 @@
         <option value="system">system</option>
       </select>
     </div>
-    <button type="submit">Create fork</button>
+    <button type="submit" class="btn btn-primary">Create fork</button>
   </form>
 </div>
 {% endblock %}

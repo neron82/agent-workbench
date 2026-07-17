@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
-import pkgutil
 import sqlite3
 from pathlib import Path
+from typing import Callable
 
 import agent_workbench.db.migrations as _migrations_pkg
 
@@ -45,7 +45,7 @@ def _applied_migration_names(conn: sqlite3.Connection) -> set[str]:
     return {row["name"] for row in rows}
 
 
-def _load_migration(name: str) -> callable:
+def _load_migration(name: str) -> Callable[[sqlite3.Connection], None]:
     """Dynamically import a migration module and return its ``up`` function."""
     module_name = f"agent_workbench.db.migrations.{name}"
     mod = importlib.import_module(module_name)
@@ -70,12 +70,21 @@ def apply_migrations(conn: sqlite3.Connection) -> list[str]:
     for name in pending:
         up_fn = _load_migration(name)
         up_fn(conn)
+        # Some migrations temporarily disable foreign-key enforcement while
+        # rebuilding tables. PRAGMA foreign_keys is a no-op inside a
+        # transaction, so commit the migration before restoring the invariant.
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = ON")
         conn.execute(
             "INSERT INTO _migrations (name) VALUES (?)", (name,)
         )
         conn.commit()
         results.append(name)
 
+    # Also repair callers that invoke the runner on a fully-migrated
+    # connection whose FK pragma was left disabled by an older migration.
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = ON")
     return results
 
 

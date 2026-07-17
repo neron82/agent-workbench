@@ -41,6 +41,7 @@ from agent_workbench.models.fork_record import (
     ForkRecord,
     ForkRecordRepository,
 )
+from agent_workbench.models.channel import ChannelRepository
 from agent_workbench.models.session_extension import (
     SESSION_STATUSES,
     SESSION_TYPES,
@@ -109,6 +110,7 @@ class ForkService:
         self.conn = conn
         self.fork_repo = ForkRecordRepository(conn)
         self.session_repo = SessionExtensionRepository(conn)
+        self.channel_repo = ChannelRepository(conn)
 
     # ------------------------------------------------------------------
     # Public API
@@ -217,6 +219,12 @@ class ForkService:
             workspace_id=parent.workspace_id,
             session_type=new_session_type,
             fork_id=fork_record.fork_id,
+        )
+        self.channel_repo.create(
+            workspace_id=parent.workspace_id,
+            channel_kind=new_session_type,
+            title=summary[:120],
+            active_session_id=child_session_id,
         )
 
         return fork_record

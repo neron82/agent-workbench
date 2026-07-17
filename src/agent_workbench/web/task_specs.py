@@ -12,7 +12,7 @@ Routes
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from flask import (
     Blueprint,
@@ -26,7 +26,7 @@ from flask import (
 import sqlite3
 
 from agent_workbench.models.session_extension import SessionExtensionRepository
-from agent_workbench.models.task_spec import TaskSpec, TaskSpecRepository
+from agent_workbench.models.task_spec import TaskSpecRepository
 from agent_workbench.web.app import get_db
 
 bp = Blueprint("task_specs", __name__)

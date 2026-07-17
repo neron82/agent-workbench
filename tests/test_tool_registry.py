@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import pytest
 
-from agent_workbench.models.tool import Tool, ToolRepository
+from agent_workbench.models.tool import ToolRepository
 from agent_workbench.services.tool_registry import ToolRegistry
 
 
@@ -51,7 +50,10 @@ class TestEffectiveTools:
             agent_profile=profile, harness_type="bogus", session_type="chat",
         ) == []
 
-    def test_chat_session_blocks_write_tools(self, db):
+    def test_chat_session_allows_all_tools(self, db):
+        """Session labels are descriptive only — chat allows all tools
+        via the permissive default policy.  Use explicit session_policy
+        to restrict."""
         repo = ToolRepository(db)
         reg = ToolRegistry(repo)
         ro = _make_tool(repo, "ro", "shell", "read_only")
@@ -62,13 +64,11 @@ class TestEffectiveTools:
             agent_profile=profile, harness_type="shell", session_type="chat",
         )
         names = {t.name for t in tools}
-        # The freshly-created tools must be filtered to the read-only one,
-        # but we also expect the builtin shell.run_command to be filtered
-        # out by the chat policy.
         assert ro.name in names
-        assert wl.name not in names
-        assert de.name not in names
-        assert "run_command" not in names
+        assert wl.name in names
+        assert de.name in names
+        # The builtin shell.run_command (write_local) is also exposed.
+        assert "run_command" in names
 
     def test_work_session_allows_everything(self, db):
         repo = ToolRepository(db)
@@ -87,7 +87,9 @@ class TestEffectiveTools:
         # The builtin shell.run_command (write_local) is also exposed.
         assert "run_command" in names
 
-    def test_research_session_allows_local_writes(self, db):
+    def test_research_session_allows_all_tools(self, db):
+        """Session labels are descriptive only — research allows all
+        tools via the permissive default policy."""
         repo = ToolRepository(db)
         reg = ToolRegistry(repo)
         ro = _make_tool(repo, "ro", "shell", "read_only")
@@ -101,8 +103,8 @@ class TestEffectiveTools:
         names = {t.name for t in tools}
         assert ro.name in names
         assert wl.name in names
-        assert wr.name not in names
-        assert de.name not in names
+        assert wr.name in names
+        assert de.name in names
 
     def test_explicit_policy_overrides_session_type(self, db):
         repo = ToolRepository(db)
@@ -113,7 +115,7 @@ class TestEffectiveTools:
         tools = reg.effective_tools(
             agent_profile=profile,
             harness_type="shell",
-            session_type="chat",  # would normally block wl
+            session_type="chat",  # labels are descriptive; policy is explicit gate
             session_policy=["read_only", "write_local"],
         )
         names = {t.name for t in tools}

@@ -49,7 +49,7 @@ def up(conn: sqlite3.Connection) -> None:
     # ``ALTER TABLE`` does not support ``IF NOT EXISTS`` on every SQLite
     # version, so we probe pragma table_info for a column before adding it.
     existing_cols = {
-        row["name"]
+        row["name"] if isinstance(row, sqlite3.Row) else row[1]
         for row in conn.execute("PRAGMA table_info(harness_runs)").fetchall()
     }
     for col_name, ddl in (

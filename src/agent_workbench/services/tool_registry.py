@@ -9,8 +9,10 @@ intersection of three filters:
    (e.g. allowed tool names, allowed harness types)
 2. ``HarnessCapabilities`` — what the underlying adapter actually
    supports (e.g. ``can_shell=True`` for ShellAdapter)
-3. ``SessionPolicy`` — runtime gate (e.g. work session allows
-   ``destructive`` tools, chat session does not)
+3. ``SessionPolicy`` — explicit per-session allow-list of permission
+   classes.  When omitted, session labels are descriptive only and
+   the permissive default is used; profile capability hints and
+   harness support remain authoritative.
 
 If no profile hints or session policy are set, the registry falls
 back to all enabled tools for the resolved harness type.
@@ -18,13 +20,18 @@ back to all enabled tools for the resolved harness type.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from agent_workbench.models.tool import Tool, ToolRepository
 
+if TYPE_CHECKING:
+    from agent_workbench.adapters.base import AdapterCapabilities
 
-# Default session policies by session_type.  ``chat`` is restrictive,
-# ``research`` allows read tools, ``work`` allows everything.
+
+# DEFAULT_SESSION_POLICIES is kept for backward-compat test references
+# but is no longer used as a permission gate.  Session labels (chat /
+# research / work) are descriptive only — capability negotiation uses
+# explicit profile capability_hints and harness support as authoritative.
 DEFAULT_SESSION_POLICIES: Dict[str, List[str]] = {
     "chat":     ["read_only"],
     "research": ["read_only", "write_local"],
@@ -61,11 +68,11 @@ class ToolRegistry:
             The harness namespace to pull tools from.  Falls back to
             ``agent_profile.harness_ref`` if not given.
         session_type:
-            ``chat | research | work`` — used to pick the default
-            permission policy when ``session_policy`` is None.
+            Legacy fallback used only when ``session_policy`` is omitted.
         session_policy:
-            Explicit allow-list of ``permission_class`` values.  Overrides
-            the default for the session type.
+            Explicit allow-list of ``permission_class`` values. An empty
+            list is the alpha runtime sentinel for "all permission classes";
+            it means labels are descriptive, not an authorization gate.
         """
         ht = harness_type or getattr(agent_profile, "harness_ref", None)
         if not ht:
@@ -74,7 +81,6 @@ class ToolRegistry:
         # 1) Adapter capability filter — local import to break the
         # adapters <-> services import cycle.
         from agent_workbench.adapters import get_adapter_class
-        from agent_workbench.adapters.base import AdapterCapabilities
         adapter_cls = get_adapter_class(ht)
         if adapter_cls is None:
             return []
@@ -89,11 +95,23 @@ class ToolRegistry:
         hints = getattr(agent_profile, "capability_hints_json", None) or {}
         allowed_names = hints.get("allowed_tools")
         denied_names = set(hints.get("denied_tools") or [])
+        allowed_permission_classes = hints.get("allowed_permission_classes")
 
-        # 4) Session permission_class allow-list
-        policy = session_policy or DEFAULT_SESSION_POLICIES.get(
-            session_type, ["read_only"]
-        )
+        # 4) Session permission_class allow-list.
+        # Session labels (chat / research / work) are descriptive only.
+        # When no explicit session_policy is given, we use the permissive
+        # default — explicit profile capability_hints and harness support
+        # are the authoritative gates.
+        # ``None`` means no explicit policy (permissive default).
+        # An explicit ``[]`` denies all permission classes.
+        DEFAULT_ALL = ["read_only", "write_local", "write_remote", "destructive"]
+        if session_policy is None:
+            # No explicit policy — use the permissive default (session
+            # labels are descriptive only, not permission gates).
+            policy = DEFAULT_ALL
+        else:
+            # Explicit policy (including []) — use as-is.
+            policy = session_policy
         policy_set = set(policy)
 
         out: List[Tool] = []
@@ -101,6 +119,8 @@ class ToolRegistry:
             if allowed_names is not None and t.name not in allowed_names:
                 continue
             if t.name in denied_names:
+                continue
+            if allowed_permission_classes is not None and t.permission_class not in allowed_permission_classes:
                 continue
             if t.permission_class not in policy_set:
                 continue

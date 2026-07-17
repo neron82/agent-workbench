@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any, Dict, List, Optional
 
@@ -91,6 +92,7 @@ class ParticipantService:
             "SELECT sp.participant_id, sp.session_id, sp.workspace_id, sp.binding_id, sp.role, sp.added_by, "
             "sp.added_at, sp.removed_at, apb.agent_profile_id, ap.name AS agent_name, "
             "ap.version AS agent_version, ap.provider_ref, ap.model_ref, ap.perspective_ref, ap.function_ref, ap.harness_ref, "
+            "ap.permissions_policy_ref, ap.capability_hints_json, "
             "r.name AS role_name, r.description AS role_description, r.system_prompt AS role_system_prompt "
             "FROM session_participants sp "
             "JOIN agent_profile_bindings apb ON apb.binding_id = sp.binding_id "
@@ -100,7 +102,17 @@ class ParticipantService:
             "ORDER BY sp.added_at ASC",
             (session_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        details = []
+        for row in rows:
+            detail = dict(row)
+            raw_hints = detail.get("capability_hints_json")
+            if isinstance(raw_hints, str):
+                try:
+                    detail["capability_hints_json"] = json.loads(raw_hints)
+                except (TypeError, ValueError):
+                    detail["capability_hints_json"] = {}
+            details.append(detail)
+        return details
 
     def get_channel_for_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         session = self.sessions.get_by_id(session_id)

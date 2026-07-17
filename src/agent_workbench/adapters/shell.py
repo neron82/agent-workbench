@@ -27,7 +27,6 @@ from agent_workbench.adapters._shared import (
 from agent_workbench.adapters.base import (
     AdapterCapabilities,
     BaseAdapter,
-    HarnessNotReadyError,
     HarnessProcessError,
     RuntimeIds,
     Transcript,

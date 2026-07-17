@@ -7,7 +7,6 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
 
 from agent_workbench.models.channel import ChannelRepository
 from agent_workbench.models.harness_run import HarnessRunRepository
@@ -21,7 +20,7 @@ from agent_workbench.services.tool_dispatcher import ToolDispatcher
 def _seed_workspace_and_session(db):
     ws = WorkspaceRepository(db).create(tenant_id="t1", name="t")
     db.commit()
-    ch = ChannelRepository(db).create(
+    ChannelRepository(db).create(
         workspace_id=ws.workspace_id,
         channel_kind="chat",
         title="t",
@@ -122,6 +121,48 @@ class TestDispatchPermissions:
         assert result.status == "denied"
         assert "permission" in result.content
 
+    def test_empty_policy_allows_read_and_write_tools(self, db):
+        """The runtime's None policy sentinel must not deny every tool."""
+        ws, sid = _seed_workspace_and_session(db)
+        read_tool = _make_tool(
+            db, "delegate", "hermes", adapter_method="delegate_subagent",
+            permission_class="read_only",
+        )
+        write_tool = _make_tool(
+            db, "run", "shell", adapter_method="start",
+            permission_class="write_local",
+        )
+        dispatcher = ToolDispatcher(db)
+
+        read_result = dispatcher.dispatch(
+            session_id=sid,
+            workspace_id=ws,
+            session_policy=None,
+            tool_call={
+                "id": "call_empty_read",
+                "function": {
+                    "name": f"hermes.{read_tool.name}",
+                    "arguments": json.dumps({"task": "inspect"}),
+                },
+            },
+        )
+        write_result = dispatcher.dispatch(
+            session_id=sid,
+            workspace_id=ws,
+            session_policy=None,
+            tool_call={
+                "id": "call_empty_write",
+                "function": {
+                    "name": f"shell.{write_tool.name}",
+                    "arguments": json.dumps({"command": "printf allowed"}),
+                },
+            },
+        )
+
+        assert read_result.status != "denied"
+        assert write_result.status == "completed"
+        assert "allowed" in write_result.content
+
     def test_disabled_tool_denied(self, db):
         ws, sid = _seed_workspace_and_session(db)
         tool = _make_tool(db, "shell.run_command", "shell", adapter_method="start",
@@ -146,7 +187,7 @@ class TestDispatchPermissions:
 class TestDispatchHermesDelegateStub:
     def test_hermes_delegate_returns_not_implemented(self, db):
         ws, sid = _seed_workspace_and_session(db)
-        # Builtin catalog has hermes.delegate_subagent as read_only.
+        # Builtin catalog has hermes.delegate_subagent disabled by default.
         dispatcher = ToolDispatcher(db)
         result = dispatcher.dispatch(
             session_id=sid,
@@ -160,9 +201,9 @@ class TestDispatchHermesDelegateStub:
                 },
             },
         )
-        # The stub is honest: it returns "failed" with a precise error.
-        assert result.status == "failed"
-        assert "not yet implemented" in result.content
+        # The tool is disabled by default, so dispatch returns denied.
+        assert result.status == "denied"
+        assert "not registered or disabled" in result.content
 
 
 class TestDispatchMalformedArguments:
@@ -355,3 +396,32 @@ class TestDispatchHermesRunRecovery:
         assert inv.status == "completed"
         assert inv.harness_run_id == result.harness_run_id
         assert "/tmp/example.txt" in result.content
+
+
+class TestAdapterMethodHarnessBoundary:
+    def test_hermes_only_method_is_denied_for_other_harness(self, db):
+        ws, sid = _seed_workspace_and_session(db)
+        tool = _make_tool(
+            db,
+            "wrong_harness_command",
+            "shell",
+            adapter_method="execute_shell",
+            permission_class="write_local",
+        )
+
+        result = ToolDispatcher(db).dispatch(
+            session_id=sid,
+            workspace_id=ws,
+            session_policy=["write_local"],
+            tool_call={
+                "id": "call_wrong_harness",
+                "function": {
+                    "name": f"shell.{tool.name}",
+                    "arguments": json.dumps({"command": "true"}),
+                },
+            },
+            agent_harness_type="shell",
+        )
+
+        assert result.status == "denied"
+        assert "only supported by the 'hermes' harness" in result.content

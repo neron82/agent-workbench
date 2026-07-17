@@ -46,6 +46,7 @@ class ToolInvocation:
     confirmation_message_id: Optional[str] = None
     requires_confirmation: bool = False
     confirmation_reason: Optional[str] = None
+    confirmation_context_json: Optional[Dict[str, Any]] = None
     created_at: float = 0.0
     completed_at: Optional[float] = None
 
@@ -68,6 +69,7 @@ class ToolInvocationRepository:
         status: str = "pending",
         requires_confirmation: bool = False,
         confirmation_reason: Optional[str] = None,
+        confirmation_context: Optional[Dict[str, Any]] = None,
     ) -> ToolInvocation:
         if status not in TOOL_INVOCATION_STATUSES:
             raise ValueError(
@@ -80,8 +82,8 @@ class ToolInvocationRepository:
             "(invocation_id, session_id, workspace_id, tool_id, tool_name, "
             "tool_harness_type, arguments_json, status, result_text, "
             "error_text, harness_run_id, requires_confirmation, "
-            "confirmation_reason, created_at, completed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, NULL)",
+            "confirmation_reason, confirmation_context_json, created_at, completed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, NULL)",
             (
                 invocation_id,
                 session_id,
@@ -93,6 +95,7 @@ class ToolInvocationRepository:
                 status,
                 1 if requires_confirmation else 0,
                 confirmation_reason,
+                json.dumps(confirmation_context) if confirmation_context else None,
                 now,
             ),
         )
@@ -105,7 +108,7 @@ class ToolInvocationRepository:
             "tool_harness_type, arguments_json, status, result_text, "
             "error_text, harness_run_id, confirmation_message_id, "
             "requires_confirmation, confirmation_reason, "
-            "created_at, completed_at "
+            "confirmation_context_json, created_at, completed_at "
             "FROM tool_invocations WHERE invocation_id = ?",
             (invocation_id,),
         ).fetchone()
@@ -119,7 +122,7 @@ class ToolInvocationRepository:
             "tool_harness_type, arguments_json, status, result_text, "
             "error_text, harness_run_id, confirmation_message_id, "
             "requires_confirmation, confirmation_reason, "
-            "created_at, completed_at "
+            "confirmation_context_json, created_at, completed_at "
             "FROM tool_invocations WHERE session_id = ? "
             "ORDER BY created_at ASC",
             (session_id,),
@@ -132,7 +135,7 @@ class ToolInvocationRepository:
             "tool_harness_type, arguments_json, status, result_text, "
             "error_text, harness_run_id, confirmation_message_id, "
             "requires_confirmation, confirmation_reason, "
-            "created_at, completed_at "
+            "confirmation_context_json, created_at, completed_at "
             "FROM tool_invocations "
             "WHERE session_id = ? AND status = 'pending_confirmation' "
             "ORDER BY created_at ASC",
@@ -201,6 +204,13 @@ class ToolInvocationRepository:
             args = json.loads(raw) if raw else {}
         except json.JSONDecodeError:
             args = {}
+        ctx_raw = row["confirmation_context_json"]
+        ctx: Optional[Dict[str, Any]] = None
+        if ctx_raw:
+            try:
+                ctx = json.loads(ctx_raw)
+            except json.JSONDecodeError:
+                ctx = None
         return ToolInvocation(
             invocation_id=row["invocation_id"],
             session_id=row["session_id"],
@@ -216,6 +226,7 @@ class ToolInvocationRepository:
             confirmation_message_id=row["confirmation_message_id"],
             requires_confirmation=bool(row["requires_confirmation"]),
             confirmation_reason=row["confirmation_reason"],
+            confirmation_context_json=ctx,
             created_at=row["created_at"],
             completed_at=row["completed_at"],
         )

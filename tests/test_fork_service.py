@@ -27,7 +27,6 @@ from agent_workbench.models.fork_record import (
     ForkRecordRepository,
 )
 from agent_workbench.models.session_extension import (
-    SESSION_TYPES,
     SessionExtension,
     SessionExtensionRepository,
 )
@@ -85,6 +84,7 @@ class TestCreateFork:
         fork_service: ForkService,
         session_repo: SessionExtensionRepository,
         fork_repo: ForkRecordRepository,
+        db: sqlite3.Connection,
         workspace_id: str,
     ) -> None:
         """A fork must produce both a ForkRecord and a child SessionExtension."""
@@ -122,6 +122,13 @@ class TestCreateFork:
         assert child.fork_id == record.fork_id
         assert child.workspace_id == workspace_id
         assert child.status == "active"
+        channel = db.execute(
+            "SELECT channel_kind, active_session_id FROM channels "
+            "WHERE active_session_id = ?",
+            (child_session_id,),
+        ).fetchone()
+        assert channel is not None
+        assert channel["channel_kind"] == "research"
 
     def test_branch_kind_when_type_is_unchanged(
         self,

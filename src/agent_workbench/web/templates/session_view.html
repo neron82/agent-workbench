@@ -3,137 +3,215 @@
 
 {% block content %}
 <div class="chat-layout" style="position:relative;">
-  {# ── Collapsible Left Sidebar ── #}
-  <div class="side-panel-left" id="side-panel-left">
+  {# ── Team & Status Panel (left) ── #}
+  <div class="side-panel-left open" id="side-panel-left">
     <div class="side-panel-body" id="side-body">
+      {# ── Session Label ── #}
       <div class="sp-section">
-        <h4>Agents</h4>
+        <h4>Session</h4>
+        {% if workspace %}
+          <a class="workspace-crumb" href="{{ url_for('channels.index', workspace_id=workspace.workspace_id) }}">
+            <span class="workspace-dot current"></span>{{ workspace.name }}
+          </a>
+        {% endif %}
+        {% set label_color = session_label_colors.get(session.session_type, 'var(--accent)') %}
+        <div class="sp-label-row" style="display:flex; align-items:center; gap:8px; padding:8px 0;">
+          <span class="sp-label-dot" style="width:10px;height:10px;border-radius:50%;background:{{ label_color }};flex-shrink:0;" aria-hidden="true"></span>
+          <span class="sp-label-name" style="font-weight:500;font-size:13px;">{{ session_label_display.get(session.session_type, session.session_type) }}</span>
+          <span class="sp-label-desc muted" style="font-size:11px;margin-left:auto;">{{ session_label_descriptions.get(session.session_type, '') }}</span>
+        </div>
+        <div class="sp-stat-row"><span class="sp-stat-label">Status</span><span class="badge badge-{{ session.status }}">{{ session.status }}</span></div>
+        <div class="sp-stat-row"><span class="sp-stat-label">Turns</span><span class="sp-stat-value" id="sp-turns">{{ session.max_auto_turns or 0 }}</span></div>
+      </div>
+
+      {# ── Participants (team) ── #}
+      <div class="sp-section">
+        <h4>Team</h4>
         <div id="sp-agent-list">
           {% if participants %}
             {% for p in participants %}
-              <div class="sp-agent-row" data-agent="{{ p.agent_name }}">
-                <span class="sp-agent-dot" id="dot-{{ p.agent_name }}">🟢</span>
+              {% set cap_hints = p.capability_hints_json or {} %}
+              {% set tools = cap_hints.get('allowed_tools', []) if cap_hints is mapping else [] %}
+              {% set permission_classes = cap_hints.get('allowed_permission_classes') if cap_hints is mapping else none %}
+              <div class="sp-agent-row" data-agent="{{ p.agent_name }}" tabindex="0" role="button" aria-label="{{ p.agent_name }} — {{ p.role_name or 'member' }}">
+                <span class="sp-agent-dot" id="dot-{{ p.agent_name }}" aria-hidden="true">⚪</span>
                 <span class="sp-agent-name">{{ p.agent_name }}</span>
                 <span class="sp-agent-status" id="status-{{ p.agent_name }}">idle</span>
+                {% if p.role_name %}
+                  <span class="sp-agent-role">{{ p.role_name }}</span>
+                {% endif %}
+                <form method="post" action="{{ url_for('sessions.remove_participant', session_id=session.session_id, participant_id=p.participant_id) }}" class="inline sp-agent-remove">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="btn-icon" onclick="event.stopPropagation()" aria-label="Remove {{ p.agent_name }}">×</button>
+                </form>
               </div>
+              {% if permission_classes is not none or tools %}
+                <div class="sp-capability-row" data-agent="{{ p.agent_name }}">
+                  {% if permission_classes is not none %}
+                    {% for permission in permission_classes %}<span class="capability-chip permission-chip">{{ permission }}</span>{% endfor %}
+                    {% if not permission_classes %}<span class="capability-chip denied">no tools</span>{% endif %}
+                  {% endif %}
+                  {% for t in tools[:3] %}
+                    <span class="capability-chip">{{ t }}</span>
+                  {% endfor %}
+                  {% if tools|length > 3 %}
+                    <span class="capability-chip more">+{{ tools|length - 3 }}</span>
+                  {% endif %}
+                </div>
+              {% endif %}
             {% endfor %}
           {% else %}
             <div class="sp-muted">No agents in this session</div>
           {% endif %}
         </div>
+        <form method="post" action="{{ url_for('sessions.add_participant', session_id=session.session_id) }}" class="sp-add-agent-form" style="margin-top:8px;display:flex;gap:4px;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <select name="agent_profile_id" class="sp-agent-select" aria-label="Add agent">
+            <option value="">+ Add agent</option>
+            {% for profile in available_agents %}
+              <option value="{{ profile.agent_profile_id }}">{{ profile.name }}</option>
+            {% endfor %}
+          </select>
+          <input type="hidden" name="participant_role" value="member">
+          <button type="submit" class="btn btn-sm" style="font-size:11px;padding:2px 8px;">Add</button>
+        </form>
+        {% if teams %}
+          <form method="post" id="apply-team-form" class="sp-add-agent-form" style="margin-top:6px;display:flex;gap:4px;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <select id="apply-team-select" aria-label="Apply reusable team">
+              <option value="">Apply team…</option>
+              {% for team in teams %}<option value="{{ team.team_id }}">{{ team.name }}</option>{% endfor %}
+            </select>
+            <button type="submit" class="btn btn-sm">Apply</button>
+          </form>
+        {% endif %}
+        <button type="button" class="btn btn-sm btn-danger" style="width:100%;margin-top:4px;" id="sp-stop-all" onclick="stopAllAgents()">■ Stop All</button>
       </div>
+
+      {# ── Assets / Files with drop-upload ── #}
       <div class="sp-section">
-        <h4>Stats</h4>
-        <div class="sp-stat-row"><span class="sp-stat-label">Turns</span><span class="sp-stat-value" id="sp-turns">{{ session.max_auto_turns or 0 }}</span></div>
-        <div class="sp-stat-row"><span class="sp-stat-label">Status</span><span class="badge badge-{{ session.status }}">{{ session.status }}</span></div>
-        <div class="sp-stat-row"><span class="sp-stat-label">Type</span><span class="badge badge-{{ session.session_type }}">{{ session.session_type }}</span></div>
-      </div>
-      <div class="sp-section">
-        <h4>Actions</h4>
-        <button class="btn btn-sm" style="width:100%; margin-bottom:4px;" onclick="document.getElementById('side-body').querySelector('select')?.focus()">+ Add Agent</button>
-        <button class="btn btn-sm btn-danger" style="width:100%;" id="sp-stop-all" onclick="stopAllAgents()">■ Stop All</button>
+        <h4>Files &amp; Assets</h4>
+        <div class="sp-asset-dropzone" id="asset-dropzone"
+             tabindex="0" role="button" aria-label="Drop files or click to upload"
+             data-session-id="{{ session.session_id }}">
+          <div class="sp-dropzone-content" id="dropzone-content">
+            <span style="display:block;font-size:20px;margin-bottom:2px;">📁</span>
+            <span class="muted" style="font-size:10px;">Drop file or click to upload</span>
+          </div>
+          <input type="file" id="asset-file-input" style="display:none" accept="*/*">
+          <div class="sp-upload-progress" id="upload-progress" style="display:none;">
+            <span class="sp-upload-status" id="upload-status">Uploading…</span>
+          </div>
+        </div>
+        <div class="sp-asset-list" id="sp-asset-list">
+          {% if project_assets %}
+            {% for asset in project_assets %}
+              <div class="sp-asset-row" data-asset-id="{{ asset.asset_id }}">
+                <span class="sp-asset-icon" aria-hidden="true">
+                  {% if asset.asset_type == 'directory' %}📁
+                  {% elif asset.asset_type == 'repository' %}🔗
+                  {% else %}📄{% endif %}
+                </span>
+                <span class="sp-asset-label truncate">{{ asset.label or asset.path }}</span>
+                <span class="sp-asset-type-badge">{{ asset.asset_type }}</span>
+              </div>
+            {% endfor %}
+          {% else %}
+            <div class="sp-muted sp-asset-placeholder" id="asset-placeholder">
+              <span style="display:block;font-size:24px;margin-bottom:4px;">📂</span>
+              No assets linked yet.
+              <div class="sp-asset-hint muted">Drop files or click above to upload.</div>
+            </div>
+          {% endif %}
+        </div>
       </div>
     </div>
   </div>
-  <div class="side-panel-toggle" id="side-toggle-btn" onclick="toggleSidePanel()" title="Toggle sidebar">▶</div>
+  <div class="side-panel-toggle" id="side-toggle-btn" onclick="toggleSidePanel()" role="button" tabindex="0" aria-label="Close sidebar">◀</div>
+
   {# ── Main Chat Area ── #}
   <div class="chat-main">
-    {# Header — simplified: back, title, badges, ⋮-menu #}
+    {# Header — back, title, badges, ⋮-menu #}
     <div class="chat-header">
-      <a href="{% if request.args.get('back') %}{{ request.args.get('back') }}{% else %}{{ url_for('channels.list_by_type', session_type=session.session_type) }}{% endif %}" class="back-btn">←</a>
-      <span class="badge badge-{{ session.session_type }}">{{ session.session_type }}</span>
+      <a href="{% if request.args.get('back') %}{{ request.args.get('back') }}{% else %}{{ url_for('channels.index', workspace_id=session.workspace_id) }}{% endif %}" class="back-btn" aria-label="Back to workspace">←</a>
+      {% if workspace %}<span class="header-workspace-name" title="Workspace">{{ workspace.name }}</span>{% endif %}
+      <span class="badge badge-{{ session.session_type }}">{{ session_label_display.get(session.session_type, session.session_type) }}</span>
       <span class="badge badge-{{ session.status }}">{{ session.status }}</span>
       <div class="session-title-label" id="session-title-display"
-           style="flex:1; font-size:14px; font-weight:500; color:var(--ink); cursor:pointer; min-width:0;"
-           onclick="editTitle()">
+           style="flex:1;font-size:14px;font-weight:500;color:var(--ink);cursor:pointer;min-width:0;"
+           onclick="editTitle()" role="button" tabindex="0" aria-label="Edit title">
         {{ session.title or session.session_id[:12] ~ '…' }}
       </div>
       <form method="post" action="{{ url_for('sessions.update_title', session_id=session.session_id) }}"
-            id="title-form" class="inline" style="display:none; flex:1;">
+            id="title-form" class="inline" style="display:none;flex:1;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="text" name="title" value="{{ session.title or '' }}"
                placeholder="Session name…" id="title-input"
-               style="flex:1; min-width:100px; padding:4px 8px; font-size:13px;">
+               style="flex:1;min-width:100px;padding:4px 8px;font-size:13px;" aria-label="Session title">
         <button type="submit" class="btn btn-sm" style="font-size:11px;">Save</button>
         <button type="button" class="btn btn-sm" onclick="cancelEditTitle()" style="font-size:11px;">Cancel</button>
       </form>
       <div class="header-menu-container" style="position:relative;">
-        <button class="btn-icon" id="header-menu-btn" onclick="toggleHeaderMenu()" title="Session actions">⋮</button>
-        <div class="header-dropdown" id="header-dropdown" style="display:none;">
-          <div class="dropdown-item" onclick="editTitle()">✏️ Rename</div>
-          <div class="dropdown-item" onclick="showTurnsInput()">🔄 Turns: {{ session.max_auto_turns or 0 }}</div>
-          <div class="dropdown-divider"></div>
-          <div class="dropdown-item">
-            <form method="post" action="{{ url_for('sessions.update_status', session_id=session.session_id) }}" class="inline" style="display:flex; align-items:center; gap:6px; width:100%;">
-              <label style="font-size:12px; color:var(--ink-secondary);">Status:</label>
-              <select name="status" onchange="this.form.submit()" style="flex:1; font-size:12px; padding:4px 6px;">
+        <button class="btn-icon" id="header-menu-btn" onclick="toggleHeaderMenu()" title="Session actions" aria-label="Session actions" aria-haspopup="true" aria-expanded="false">⋮</button>
+        <div class="header-dropdown" id="header-dropdown" style="display:none;" role="menu">
+          <div class="dropdown-item" onclick="editTitle()" role="menuitem">✏️ Rename</div>
+          <div class="dropdown-item" onclick="showTurnsInput()" role="menuitem">🔄 Turns: {{ session.max_auto_turns or 0 }}</div>
+          <div class="dropdown-divider" role="separator"></div>
+          <div class="dropdown-item" role="menuitem">
+            <form method="post" action="{{ url_for('sessions.update_status', session_id=session.session_id) }}" class="inline" style="display:flex;align-items:center;gap:6px;width:100%;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <label style="font-size:12px;color:var(--ink-secondary);">Status:</label>
+              <select name="status" onchange="this.form.submit()" style="flex:1;font-size:12px;padding:4px 6px;" aria-label="Session status">
                 {% for s in session_statuses %}
                   <option value="{{ s }}" {% if s == session.status %}selected{% endif %}>{{ s }}</option>
                 {% endfor %}
               </select>
             </form>
           </div>
-          <div class="dropdown-divider"></div>
-          <div class="dropdown-item">
-            <form method="post" action="{{ url_for('sessions.update_max_auto_turns', session_id=session.session_id) }}" class="inline" style="display:flex; align-items:center; gap:6px; width:100%;">
-              <label style="font-size:12px; color:var(--ink-secondary);">Turns:</label>
-              <input type="number" name="max_auto_turns" value="{{ session.max_auto_turns or 0 }}" min="0" max="50" style="width:50px; font-size:12px; padding:2px 4px; text-align:center;">
+          <div class="dropdown-divider" role="separator"></div>
+          <div class="dropdown-item" role="menuitem">
+            <form method="post" action="{{ url_for('sessions.update_max_auto_turns', session_id=session.session_id) }}" class="inline" style="display:flex;align-items:center;gap:6px;width:100%;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <label style="font-size:12px;color:var(--ink-secondary);">Turns:</label>
+              <input type="number" name="max_auto_turns" value="{{ session.max_auto_turns or 0 }}" min="0" max="50" style="width:50px;font-size:12px;padding:2px 4px;text-align:center;" aria-label="Max auto turns">
               <button type="submit" class="btn btn-sm" style="font-size:10px;">Set</button>
             </form>
           </div>
-          <div class="dropdown-divider"></div>
-          <div class="dropdown-item">
-            <a href="{{ url_for('sessions.session_config', session_id=session.session_id) }}" style="color:inherit; text-decoration:none; display:block;">⚙ Config</a>
+          <div class="dropdown-divider" role="separator"></div>
+          <div class="dropdown-item" role="menuitem">
+            <a href="{{ url_for('sessions.session_config', session_id=session.session_id) }}" style="color:inherit;text-decoration:none;display:block;">⚙ Config</a>
           </div>
-          <div class="dropdown-item">
-            <form method="get" action="{{ url_for('channels.fork_channel', channel_id=channel.channel_id) if channel else '#' }}" class="inline">
-              <button type="submit" class="btn-link" {% if not channel %}disabled{% endif %} style="all:unset; cursor:pointer; font:inherit; color:inherit; width:100%; text-align:left;">🔀 Fork</button>
-            </form>
+          <div class="dropdown-item" role="menuitem">
+            <a href="{{ url_for('sessions.session_config', session_id=session.session_id) }}#transfer" style="color:inherit;text-decoration:none;display:block;">↗ Transfer</a>
           </div>
-          <div class="dropdown-divider"></div>
-          <div class="dropdown-item dropdown-danger">
+          <div class="dropdown-divider" role="separator"></div>
+          <div class="dropdown-item" role="menuitem">
+            <a href="/sessions/{{ session.session_id }}/export?format=markdown" style="color:inherit;text-decoration:none;display:block;" aria-label="Export as Markdown">📝 Export Markdown</a>
+          </div>
+          <div class="dropdown-item" role="menuitem">
+            <a href="/sessions/{{ session.session_id }}/export?format=json" style="color:inherit;text-decoration:none;display:block;" aria-label="Export as JSON">📊 Export JSON</a>
+          </div>
+          <div class="dropdown-divider" role="separator"></div>
+          <div class="dropdown-item dropdown-danger" role="menuitem">
             <form method="post" action="{{ url_for('sessions.delete_session', session_id=session.session_id) }}" class="inline"
                   onsubmit="return confirm('Delete this session and all its messages? This cannot be undone.');">
-              <button type="submit" class="btn-link" style="all:unset; cursor:pointer; font:inherit; color:inherit; width:100%; text-align:left;">🗑 Delete</button>
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn-link" style="all:unset;cursor:pointer;font:inherit;color:inherit;width:100%;text-align:left;">🗑 Delete</button>
             </form>
           </div>
         </div>
       </div>
     </div>
 
-    {# Participants bar #}
-    <div style="padding:8px 24px; border-bottom:1px solid var(--border); display:flex; gap:6px; flex-wrap:wrap; align-items:center; background:var(--bg-secondary);">
-      <span style="font-size:11px; color:var(--ink-muted); font-weight:500;">Participants:</span>
-      {% if participants %}
-        {% for p in participants %}
-          <span class="chip" style="display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border:1px solid var(--border); border-radius:999px; font-size:11px; background:var(--panel);">
-            <span style="width:6px;height:6px;border-radius:50%;background:var(--chat);display:inline-block;"></span>
-            {{ p.agent_name }}
-            <form method="post" action="{{ url_for('sessions.remove_participant', session_id=session.session_id, participant_id=p.participant_id) }}" class="inline" style="margin:0;">
-              <button type="submit" class="btn-icon" style="font-size:12px; padding:0 2px;">×</button>
-            </form>
-          </span>
-        {% endfor %}
-      {% else %}
-        <span class="muted" style="font-size:11px;">None</span>
-      {% endif %}
-      <form method="post" action="{{ url_for('sessions.add_participant', session_id=session.session_id) }}" class="inline" style="margin-left:auto; display:flex; gap:4px;">
-        <select name="agent_profile_id" style="font-size:11px; padding:2px 6px;">
-          <option value="">+ Add agent</option>
-          {% for profile in available_agents %}
-            <option value="{{ profile.agent_profile_id }}">{{ profile.name }}</option>
-          {% endfor %}
-        </select>
-        <input type="hidden" name="participant_role" value="member">
-        <button type="submit" class="btn btn-sm" style="font-size:11px; padding:2px 8px;">Add</button>
-      </form>
-    </div>
 
     {# ── Agent Working Indicator ── #}
-    <div id="agent-working-bar" style="display:none; padding:8px 24px; border-bottom:1px solid var(--border); background:var(--accent-bg);">
-      <div id="agent-working-content" style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-        <span style="font-size:12px; font-weight:600; color:var(--accent);">⏳ Working…</span>
+    <div id="agent-working-bar" style="display:none;padding:8px 24px;border-bottom:1px solid var(--border);background:var(--accent-bg);">
+      <div id="agent-working-content" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <span style="font-size:12px;font-weight:600;color:var(--accent);">⏳ Working…</span>
         <span id="agent-working-detail" class="muted" style="font-size:11px;"></span>
-        <div style="margin-left:auto; display:flex; gap:6px;">
+        <span id="agent-working-count" class="agent-count-badge" style="display:none;"></span>
+        <div style="margin-left:auto;display:flex;gap:6px;">
+          <button id="btn-inspect-work" class="btn btn-sm btn-inspect" style="display:none;" onclick="openLiveWorkPanel()" aria-label="Inspect agent work">🔍 Inspect work</button>
           <button id="btn-stop-agent" class="btn btn-sm btn-danger" style="display:none;" onclick="stopAgent()">■ Stop</button>
         </div>
       </div>
@@ -143,7 +221,22 @@
     <div class="chat-messages" id="message-thread">
       <div id="message-list"
            data-session-id="{{ session.session_id }}"
-           data-after="{{ messages[-1].created_at if messages else 0 }}">
+           data-after="{{ messages[-1].created_at if messages else 0 }}"
+           {% if has_earlier_messages is defined %}
+           data-has-earlier="{{ 'true' if has_earlier_messages else 'false' }}"
+           data-oldest-cursor="{{ oldest_message_cursor or '' }}"
+           {% endif %}>
+        {% if has_earlier_messages is defined and has_earlier_messages %}
+        <div class="load-earlier-wrap">
+          <button type="button" class="btn btn-sm load-earlier-btn" id="load-earlier-btn"
+                  data-cursor="{{ oldest_message_cursor or '' }}"
+                  data-loading="false"
+                  aria-label="Load earlier messages">↑ Load earlier</button>
+          <div class="load-earlier-error" id="load-earlier-error" style="display:none;font-size:11px;color:var(--danger);text-align:center;padding:4px;">
+            Failed to load. <button type="button" class="btn-link" id="load-earlier-retry" style="font-size:11px;color:var(--accent);cursor:pointer;border:none;background:none;padding:0;text-decoration:underline;">Retry</button>
+          </div>
+        </div>
+        {% endif %}
         {% for message in messages %}
           {% include "message_row.html" %}
         {% else %}
@@ -159,15 +252,25 @@
     {# Input #}
     <div class="chat-input-area">
       <div class="chat-input-wrap" style="position:relative;">
+        {% if participants %}
+        <div class="target-selector" aria-label="Message recipients">
+          <span class="target-label">Send to</span>
+          <label class="target-chip selected"><input type="checkbox" id="target-all" checked>All agents</label>
+          {% for p in participants %}
+            <label class="target-chip"><input type="checkbox" class="target-agent" form="chat-form" name="target_agents" value="{{ p.agent_name }}">{{ p.agent_name }}</label>
+          {% endfor %}
+        </div>
+        {% endif %}
         <form method="post" action="{{ url_for('sessions.post_message', session_id=session.session_id) }}" class="chat-input-row" id="chat-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <textarea name="body" placeholder="Type a message… (use @ to mention an agent)" required
                     id="chat-input"
-                    data-agent-names="{{ participants|map(attribute='agent_name')|list|join(',') }}"
+                    data-agent-names='{{ participants|map(attribute="agent_name")|list|tojson }}'
                     autocomplete="off"></textarea>
-          <input type="hidden" name="user_id" value="web-user">
           <input type="hidden" name="message_kind" value="conversation">
           <button type="submit" class="btn btn-primary" id="chat-send-btn">Send</button>
         </form>
+        <div id="composer-feedback" class="composer-feedback" role="status" aria-live="polite"></div>
         <div class="autocomplete-dropdown" id="autocomplete-dd" style="display:none;"></div>
       </div>
     </div>
@@ -177,7 +280,7 @@
   <div class="toolcall-detail-panel" id="toolcall-panel">
     <div class="panel-header">
       <h3 id="toolcall-panel-title">Tool Call Details</h3>
-      <button class="btn-icon" onclick="closeToolPanel()">✕</button>
+      <button class="btn-icon" onclick="closeToolPanel()" aria-label="Close details">✕</button>
     </div>
     <div class="panel-body" id="toolcall-body">
       <div class="empty-state" style="padding:20px 0;">
@@ -187,15 +290,99 @@
   </div>
 </div>
 
+{# ── Keyboard Shortcuts Overlay ── #}
+<div class="shortcuts-overlay" id="shortcuts-overlay" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" style="display:none;">
+  <div class="shortcuts-backdrop" onclick="closeShortcutsOverlay()"></div>
+  <div class="shortcuts-panel">
+    <div class="shortcuts-header">
+      <h3>Keyboard Shortcuts</h3>
+      <button class="btn-icon shortcuts-close" id="shortcuts-close" onclick="closeShortcutsOverlay()" aria-label="Close shortcuts" autofocus>✕</button>
+    </div>
+    <div class="shortcuts-body">
+      <div class="shortcut-row"><kbd>Ctrl+Enter</kbd><span>Send message (in chat input)</span></div>
+      <div class="shortcut-row"><kbd>Enter</kbd><span>New line (in chat input)</span></div>
+      <div class="shortcut-row"><kbd>Escape</kbd><span>Close overlay / dropdown / panel</span></div>
+      <div class="shortcut-row"><kbd>@</kbd><span>Focus chat input (outside editable fields)</span></div>
+      <div class="shortcut-row"><kbd>?</kbd><span>Toggle this shortcuts overlay</span></div>
+    </div>
+    <div class="shortcuts-footer muted" style="font-size:10px;text-align:center;padding:8px;color:var(--ink-muted);">
+      <span id="shortcuts-modifier-label">Ctrl</span> on desktop · <span id="shortcuts-mac-label">Cmd</span> on macOS
+    </div>
+  </div>
+</div>
+
 {# ── Scripts ── #}
 <script>
 var sessionId = '{{ session.session_id }}';
 var pollTimer = null;
+var statusFailureCount = 0;
+
+// ── Live agent state tracking ──────────────────────────────────────
+var liveAgentStates = Object.create(null);  // agent_name -> latest poll data
+var _livePanelMode = false;  // true when panel is showing live agent work
+var _livePanelAgent = null;  // agent_name currently shown in live panel, or null for all
+
+// ── Shared step renderer (used by both final bubble and live monitor) ──
+function renderStepHtml(s, showInvocationLink) {
+  var html = '<div class="detail-section live-step">';
+  html += '<h4>#' + escapeHtml(String(s.iteration)) + ' — ' + escapeHtml(s.tool_name || '?') + '</h4>';
+  var statusClass = _safeBadgeClass(s.status || 'completed');
+  html += '<div class="kv-row"><span class="k">Status</span><span class="badge badge-' + statusClass + '">' + escapeHtml(s.status || '?') + '</span></div>';
+
+  if (s.started_at) {
+    var dur = '';
+    if (s.completed_at) {
+      dur = ' (' + _formatDuration(s.completed_at - s.started_at) + ')';
+    }
+    html += '<div class="kv-row"><span class="k">Duration</span><span class="step-duration">' + _formatTimestamp(s.started_at) + dur + '</span></div>';
+  }
+
+  if (s.tool_arguments && Object.keys(s.tool_arguments).length) {
+    html += '<h5 style="margin:6px 0 2px;font-size:11px;color:var(--ink-muted);">Arguments</h5>';
+    html += '<pre style="font-size:11px;max-height:120px;overflow-y:auto;">' + escapeHtml(JSON.stringify(s.tool_arguments, null, 2)) + '</pre>';
+  }
+
+  if (s.tool_result) {
+    html += '<h5 style="margin:6px 0 2px;font-size:11px;color:var(--ink-muted);">Result</h5>';
+    html += '<pre class="result-preview" style="font-size:11px;max-height:200px;overflow-y:auto;">' + escapeHtml(s.tool_result) + '</pre>';
+  }
+
+  if (showInvocationLink && s.invocation_id) {
+    html += '<div style="margin-top:4px;"><a href="/invocations/' + encodeURIComponent(s.invocation_id) + '/detail" class="btn btn-sm" style="font-size:10px;">View full →</a></div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function _safeBadgeClass(raw) {
+  var allowlist = ['completed', 'running', 'failed', 'error', 'stopped', 'working', 'idle', 'queued'];
+  var val = String(raw || '').toLowerCase();
+  if (allowlist.indexOf(val) !== -1) return val;
+  return 'system';
+}
+
+function _formatDuration(seconds) {
+  if (typeof seconds !== 'number' || seconds < 0) return '';
+  if (seconds < 1) return Math.round(seconds * 1000) + 'ms';
+  if (seconds < 60) return seconds.toFixed(1) + 's';
+  var m = Math.floor(seconds / 60);
+  var s = Math.round(seconds % 60);
+  return m + 'm ' + s + 's';
+}
+
+function _formatTimestamp(ts) {
+  if (!ts) return '';
+  var d = new Date(ts * 1000);
+  return d.toLocaleTimeString();
+}
 
 function openToolPanel(invocationId) {
   var panel = document.getElementById('toolcall-panel');
   var body = document.getElementById('toolcall-body');
   var title = document.getElementById('toolcall-panel-title');
+  _livePanelMode = false;
+  _livePanelAgent = null;
   panel.classList.add('open');
   title.textContent = 'Tool Call Details';
 
@@ -206,7 +393,7 @@ function openToolPanel(invocationId) {
       html += '<h4>Tool</h4>';
       html += '<div class="kv-row"><span class="k">Name</span><span>' + escapeHtml(data.tool_name) + '</span></div>';
       html += '<div class="kv-row"><span class="k">Harness</span><span>' + escapeHtml(data.tool_harness_type) + '</span></div>';
-      html += '<div class="kv-row"><span class="k">Status</span><span class="badge badge-' + data.status + '">' + data.status + '</span></div>';
+      html += '<div class="kv-row"><span class="k">Status</span><span class="badge badge-' + _safeBadgeClass(data.status) + '">' + escapeHtml(data.status) + '</span></div>';
       html += '</div>';
 
       if (data.arguments_json) {
@@ -254,35 +441,14 @@ function openWorkPanelFromBubble(element) {
   var steps = [];
   try { steps = JSON.parse(stepsJson); } catch(e) { steps = []; }
 
+  _livePanelMode = false;
+  _livePanelAgent = null;
   panel.classList.add('open');
   title.textContent = agentName + ' — Work Steps (' + steps.length + ')';
 
   var html = '';
   for (var i = 0; i < steps.length; i++) {
-    var s = steps[i];
-    html += '<div class="detail-section" style="border-bottom:1px solid var(--border); padding-bottom:8px; margin-bottom:8px;">';
-    html += '<h4>#' + s.iteration + ' — ' + escapeHtml(s.tool_name || '?') + '</h4>';
-    html += '<div class="kv-row"><span class="k">Status</span><span class="badge badge-' + (s.status || 'completed') + '">' + (s.status || '?') + '</span></div>';
-
-    if (s.tool_arguments && Object.keys(s.tool_arguments).length) {
-      html += '<h5 style="margin:6px 0 2px; font-size:11px; color:var(--ink-muted);">Arguments</h5>';
-      html += '<pre style="font-size:11px; max-height:120px; overflow-y:auto;">' + escapeHtml(JSON.stringify(s.tool_arguments, null, 2)) + '</pre>';
-    }
-
-    if (s.tool_result) {
-      var resultPreview = s.tool_result;
-      if (resultPreview.length > 2000) {
-        resultPreview = resultPreview.substring(0, 2000) + '\n… [truncated]';
-      }
-      html += '<h5 style="margin:6px 0 2px; font-size:11px; color:var(--ink-muted);">Result</h5>';
-      html += '<pre style="font-size:11px; max-height:200px; overflow-y:auto;">' + escapeHtml(resultPreview) + '</pre>';
-    }
-
-    if (s.invocation_id) {
-      html += '<div style="margin-top:4px;"><a href="/invocations/' + s.invocation_id + '/detail" class="btn btn-sm" style="font-size:10px;">View full →</a></div>';
-    }
-
-    html += '</div>';
+    html += renderStepHtml(steps[i], true);
   }
 
   if (steps.length === 0) {
@@ -292,13 +458,105 @@ function openWorkPanelFromBubble(element) {
   body.innerHTML = html;
 }
 
+// ── Live work panel (Inspect work) ────────────────────────────────
+function openLiveWorkPanel(agentName) {
+  var panel = document.getElementById('toolcall-panel');
+  var body = document.getElementById('toolcall-body');
+  var title = document.getElementById('toolcall-panel-title');
+
+  _livePanelMode = true;
+  _livePanelAgent = agentName || null;  // null shows all agents
+  panel.classList.add('open');
+  title.textContent = 'Agent Work — Live';
+
+  _renderLivePanel();
+}
+
+function _renderLivePanel() {
+  var body = document.getElementById('toolcall-body');
+  var title = document.getElementById('toolcall-panel-title');
+  if (!body) return;
+  var previousScrollTop = body.scrollTop;
+
+  var agents = [];
+  for (var name in liveAgentStates) {
+    if (Object.prototype.hasOwnProperty.call(liveAgentStates, name)) {
+      agents.push(liveAgentStates[name]);
+    }
+  }
+
+  if (agents.length === 0) {
+    body.innerHTML = '<div class="empty-state"><p class="muted">No agents tracked yet.</p></div>';
+    return;
+  }
+
+  // Sidebar: list all agents
+  var sidebarHtml = '<div class="live-agent-sidebar">';
+  for (var i = 0; i < agents.length; i++) {
+    var a = agents[i];
+    var isActive = (!_livePanelAgent || _livePanelAgent === a.agent_name);
+    var statusClass = _safeBadgeClass(a.status);
+    sidebarHtml += '<button type="button" class="live-agent-entry' + (isActive ? ' active' : '') + '" data-live-agent-name="' + escapeHtml(a.agent_name) + '" aria-pressed="' + (isActive ? 'true' : 'false') + '" aria-label="Inspect ' + escapeHtml(a.agent_name) + '">';
+    sidebarHtml += '<span class="badge badge-' + statusClass + '" style="font-size:9px;padding:1px 5px;">' + escapeHtml(a.status) + '</span>';
+    sidebarHtml += '<span class="sp-agent-name">' + escapeHtml(a.agent_name) + '</span>';
+    if (a.error) {
+      sidebarHtml += '<span class="muted" style="font-size:10px;color:var(--danger);">' + escapeHtml(a.error) + '</span>';
+    }
+    sidebarHtml += '</button>';
+  }
+  sidebarHtml += '</div>';
+
+  // Detail: show selected agent's steps
+  var detailHtml = '<div class="live-agent-detail">';
+  var shownAgents = _livePanelAgent ? agents.filter(function(a) { return a.agent_name === _livePanelAgent; }) : agents;
+  for (var j = 0; j < shownAgents.length; j++) {
+    var agent = shownAgents[j];
+    detailHtml += '<div class="detail-section">';
+    detailHtml += '<h4>' + escapeHtml(agent.agent_name) + ' — <span class="badge badge-' + _safeBadgeClass(agent.status) + '">' + escapeHtml(agent.status) + '</span></h4>';
+    if (agent.error) {
+      detailHtml += '<p style="color:var(--danger);font-size:12px;">' + escapeHtml(agent.error) + '</p>';
+    }
+    var steps = agent.steps || [];
+    if (steps.length === 0) {
+      detailHtml += '<p class="muted" style="font-size:11px;">No steps yet.</p>';
+    } else {
+      for (var k = 0; k < steps.length; k++) {
+        detailHtml += renderStepHtml(steps[k], false);
+      }
+    }
+    detailHtml += '</div>';
+  }
+  detailHtml += '</div>';
+
+  // Footer with agent count
+  var footerHtml = '<div class="live-panel-footer">';
+  footerHtml += '<span class="muted">' + agents.length + ' agent(s) tracked</span>';
+  footerHtml += '</div>';
+
+  body.innerHTML = sidebarHtml + detailHtml + footerHtml;
+  title.textContent = 'Agent Work — Live (' + agents.length + ')';
+  body.querySelectorAll('[data-live-agent-name]').forEach(function(entry) {
+    entry.addEventListener('click', function() {
+      _selectLiveAgent(entry.getAttribute('data-live-agent-name'));
+    });
+  });
+  body.scrollTop = previousScrollTop;
+}
+
+function _selectLiveAgent(agentName) {
+  _livePanelAgent = agentName;
+  _renderLivePanel();
+}
+
 function closeToolPanel() {
+  _livePanelMode = false;
+  _livePanelAgent = null;
   document.getElementById('toolcall-panel').classList.remove('open');
 }
 
 function escapeHtml(str) {
   if (!str) return '';
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/`/g,'&#96;');
 }
 
 // ── Agent status polling ──────────────────────────────────────────
@@ -307,20 +565,37 @@ function pollAgentStatus() {
   fetch('/sessions/' + sessionId + '/agent-status')
     .then(function(r) { return r.json(); })
     .then(function(data) {
+      statusFailureCount = 0;
       var agents = data.agents || [];
       var bar = document.getElementById('agent-working-bar');
       var detail = document.getElementById('agent-working-detail');
       var stopBtn = document.getElementById('btn-stop-agent');
+      var inspectBtn = document.getElementById('btn-inspect-work');
+      var countEl = document.getElementById('agent-working-count');
+
+      // Update liveAgentStates map
+      liveAgentStates = Object.create(null);
+      for (var i = 0; i < agents.length; i++) {
+        liveAgentStates[agents[i].agent_name] = agents[i];
+      }
 
       if (agents.length === 0) {
-        // No agents tracked yet — keep polling, just hide the bar
         bar.style.display = 'none';
         stopBtn.style.display = 'none';
+        inspectBtn.style.display = 'none';
+        if (countEl) countEl.style.display = 'none';
         updateSidebarAgents([]);
+        if (_livePanelMode) _renderLivePanel();
         return;
       }
 
       updateSidebarAgents(agents);
+
+      // Show agent count
+      if (countEl) {
+        countEl.textContent = agents.length + ' agent(s)';
+        countEl.style.display = 'inline';
+      }
 
       var working = agents.filter(function(a) { return a.status === 'working'; });
       if (working.length > 0) {
@@ -334,29 +609,37 @@ function pollAgentStatus() {
         }
         stopBtn.style.display = 'inline-flex';
         stopBtn.dataset.agentName = w.agent_name;
+        inspectBtn.style.display = 'inline-flex';
       } else {
         bar.style.display = 'none';
         stopBtn.style.display = 'none';
-        // Only stop polling when ALL agents are done
+        inspectBtn.style.display = 'none';
         var allDone = agents.every(function(a) {
           return a.status === 'completed' || a.status === 'error' || a.status === 'stopped';
         });
         if (allDone && agents.length > 0) {
           detail.textContent = 'Done.';
-          if (pollTimer) {
-            clearInterval(pollTimer);
-            pollTimer = null;
-          }
         }
       }
+
+      // If live panel is open, refresh it without closing
+      if (_livePanelMode) {
+        _renderLivePanel();
+      }
     })
-    .catch(function() {});
+    .catch(function() {
+      statusFailureCount += 1;
+      if (statusFailureCount >= 3) {
+        var bar = document.getElementById('agent-working-bar');
+        var detail = document.getElementById('agent-working-detail');
+        bar.style.display = 'block';
+        detail.textContent = 'Live agent status unavailable — reconnecting…';
+      }
+    });
 }
 
 function updateSidebarAgents(agents) {
-  if (!agents || agents.length === 0) {
-    return;
-  }
+  if (!agents || agents.length === 0) return;
   agents.forEach(function(a) {
     var dot = document.getElementById('dot-' + a.agent_name);
     var statusEl = document.getElementById('status-' + a.agent_name);
@@ -378,37 +661,24 @@ function updateSidebarAgents(agents) {
   });
 }
 
-// ── Sidebar agent row click → show working bar ──────────────────
+// ── Sidebar agent row click → inspect that agent's live work ───
 function setupSidebarClicks() {
   document.querySelectorAll('.sp-agent-row').forEach(function(row) {
     row.addEventListener('click', function() {
       var name = row.getAttribute('data-agent');
       if (!name) return;
-      // Fetch the latest status for this agent and show it in the working bar
+      if (liveAgentStates[name]) {
+        openLiveWorkPanel(name);
+        return;
+      }
       fetch('/sessions/' + sessionId + '/agent-status')
         .then(function(r) { return r.json(); })
         .then(function(data) {
           var agents = data.agents || [];
           var agent = agents.find(function(a) { return a.agent_name === name; });
           if (!agent) return;
-          var bar = document.getElementById('agent-working-bar');
-          var detail = document.getElementById('agent-working-detail');
-          var stopBtn = document.getElementById('btn-stop-agent');
-          if (agent.status === 'working') {
-            bar.style.display = 'block';
-            var step = agent.current_step;
-            if (step) {
-              detail.textContent = agent.agent_name + ' — ' + step.tool_name + ' (#' + step.iteration + ')';
-            } else {
-              detail.textContent = agent.agent_name + ' — waiting for LLM…';
-            }
-            stopBtn.style.display = 'inline-flex';
-            stopBtn.dataset.agentName = agent.agent_name;
-          } else {
-            detail.textContent = agent.agent_name + ' — ' + agent.status;
-            bar.style.display = 'block';
-            stopBtn.style.display = 'none';
-          }
+          liveAgentStates[name] = agent;
+          openLiveWorkPanel(name);
         })
         .catch(function() {});
     });
@@ -420,26 +690,35 @@ function stopAgent() {
   var agentName = btn.dataset.agentName || '';
   if (!agentName) return;
 
-  var form = document.createElement('form');
-  form.method = 'POST';
-  form.action = '/sessions/' + sessionId + '/stop-agent';
-  var input = document.createElement('input');
-  input.type = 'hidden';
-  input.name = 'agent_name';
-  input.value = agentName;
-  form.appendChild(input);
-  document.body.appendChild(form);
-  form.submit();
+  fetch('/sessions/' + sessionId + '/stop-agent', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': getCsrfToken()},
+    body: 'agent_name=' + encodeURIComponent(agentName),
+  }).then(function() {
+    pollAgentStatus();
+  }).catch(function() {});
+}
+
+function ensureAgentStatusPolling() {
+  if (pollTimer) return;
+  pollAgentStatus();
+  pollTimer = setInterval(pollAgentStatus, 1000);
 }
 
 // Start polling when page loads
 document.addEventListener('DOMContentLoaded', function() {
+  if (window.matchMedia('(max-width: 640px)').matches) {
+    document.getElementById('side-panel-left').classList.remove('open');
+    document.getElementById('side-toggle-btn').textContent = '▶';
+    document.getElementById('side-toggle-btn').setAttribute('aria-label', 'Open sidebar');
+  }
   pollTimer = setInterval(pollAgentStatus, 1000);
   setupAutocomplete();
   setupChatForm();
   setupEnterKey();
+  setupTargetSelector();
+  setupApplyTeam();
   setupSidebarClicks();
-  // Auto-scroll to bottom on page load
   scrollToBottom();
 });
 
@@ -456,21 +735,17 @@ function scrollToBottom() {
 function userIsNearBottom() {
   var thread = document.getElementById('message-thread');
   if (!thread) return true;
-  var threshold = 80; // px from bottom
+  var threshold = 80;
   return (thread.scrollHeight - thread.scrollTop - thread.clientHeight) < threshold;
 }
 
-// Track user scrolling — if they scroll up, stop auto-scrolling
-// until they scroll back down or a new message arrives
 (function() {
   var thread = document.getElementById('message-thread');
   if (!thread) return;
   thread.addEventListener('scroll', function() {
-    if (_scrollCheckTimer) return; // already tracking
-    if (userIsNearBottom()) return; // user is reading old messages
-    // User scrolled up — pause auto-scroll
+    if (_scrollCheckTimer) return;
+    if (userIsNearBottom()) return;
     _scrollingUp = true;
-    // Resume auto-scroll after 3s of no scrolling (user probably finished reading)
     _scrollCheckTimer = setTimeout(function() {
       _scrollingUp = false;
       _scrollCheckTimer = null;
@@ -478,7 +753,6 @@ function userIsNearBottom() {
   });
 })();
 
-// Override scrollToBottom to be user-aware
 var _origScrollToBottom = scrollToBottom;
 scrollToBottom = function() {
   if (_scrollingUp && !userIsNearBottom()) return;
@@ -493,7 +767,12 @@ function setupAutocomplete() {
   var input = document.getElementById('chat-input');
   if (!input) return;
   var raw = input.getAttribute('data-agent-names') || '';
-  acAgents = raw ? raw.split(',').filter(function(n) { return n.trim(); }) : [];
+  try {
+    var parsedNames = JSON.parse(raw || '[]');
+    acAgents = Array.isArray(parsedNames) ? parsedNames.filter(function(n) { return typeof n === 'string' && n.trim(); }) : [];
+  } catch (e) {
+    acAgents = [];
+  }
   if (acAgents.length === 0) return;
 
   input.addEventListener('input', function() { onAcInput(input); });
@@ -527,7 +806,7 @@ function onAcKeydown(input, e) {
     e.preventDefault();
     acSelectedIndex = Math.max(acSelectedIndex - 1, 0);
     updateAcSelection(items);
-  } else if (e.key === 'Enter' || e.key === 'Tab') {
+  } else if ((e.key === 'Enter' && !e.ctrlKey && !e.metaKey) || e.key === 'Tab') {
     if (acSelectedIndex >= 0 && items[acSelectedIndex]) {
       e.preventDefault();
       var nameSpan = items[acSelectedIndex].querySelector('span:first-child');
@@ -596,17 +875,15 @@ function insertAcFromClick(el) {
   insertAc(input, name);
 }
 
-// ── Enter sends, Shift+Enter newline ──────────────────────────────
+// ── Cmd/Ctrl+Enter sends; plain Enter remains a newline ───────────
 function setupEnterKey() {
   var input = document.getElementById('chat-input');
   if (!input) return;
   input.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      // Don't intercept if autocomplete is open
-      var dd = document.getElementById('autocomplete-dd');
-      if (dd && dd.style.display !== 'none') return;
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
-      document.getElementById('chat-form').requestSubmit();
+      var btn = document.getElementById('chat-send-btn');
+      if (btn && !btn.disabled) document.getElementById('chat-form').requestSubmit();
     }
   });
 }
@@ -619,32 +896,74 @@ function setupChatForm() {
     e.preventDefault();
     var btn = document.getElementById('chat-send-btn');
     var textarea = document.getElementById('chat-input');
+    var feedback = document.getElementById('composer-feedback');
     var body = textarea.value.trim();
     if (!body) return;
+    ensureAgentStatusPolling();
     btn.disabled = true;
     btn.textContent = '…';
+    feedback.textContent = 'Sending…';
+    feedback.className = 'composer-feedback';
     fetch(form.action, {
       method: 'POST',
       body: new FormData(form),
       redirect: 'manual',
-      headers: { 'X-Requested-With': 'fetch' },
-    }).then(function() {
+      headers: { 'X-Requested-With': 'fetch', 'X-CSRF-Token': getCsrfToken() },
+    }).then(function(response) {
+      if (!(response.ok || response.type === 'opaqueredirect' || response.status === 0)) {
+        throw new Error('Message was rejected (' + response.status + ')');
+      }
       textarea.value = '';
       textarea.focus();
       btn.disabled = false;
       btn.textContent = 'Send';
+      feedback.textContent = 'Sent — agents are being dispatched.';
       scrollToBottom();
-    }).catch(function() {
+    }).catch(function(error) {
       btn.disabled = false;
       btn.textContent = 'Send';
+      feedback.textContent = error.message || 'Message could not be sent.';
+      feedback.className = 'composer-feedback error';
     });
+  });
+}
+
+function setupTargetSelector() {
+  var all = document.getElementById('target-all');
+  var agents = Array.prototype.slice.call(document.querySelectorAll('.target-agent'));
+  if (!all) return;
+  function refresh() {
+    var any = agents.some(function(input) { return input.checked; });
+    all.checked = !any;
+    all.closest('label').classList.toggle('selected', !any);
+    agents.forEach(function(input) {
+      input.closest('label').classList.toggle('selected', input.checked);
+    });
+  }
+  all.addEventListener('change', function() {
+    if (all.checked) agents.forEach(function(input) { input.checked = false; });
+    refresh();
+  });
+  agents.forEach(function(input) { input.addEventListener('change', refresh); });
+  refresh();
+}
+
+function setupApplyTeam() {
+  var form = document.getElementById('apply-team-form');
+  var select = document.getElementById('apply-team-select');
+  if (!form || !select) return;
+  form.addEventListener('submit', function(event) {
+    if (!select.value) { event.preventDefault(); return; }
+    form.action = '/sessions/' + sessionId + '/teams/' + encodeURIComponent(select.value) + '/apply';
   });
 }
 
 // ── Header dropdown ──────────────────────────────────────────────
 function toggleHeaderMenu() {
   var dd = document.getElementById('header-dropdown');
-  dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+  var isOpen = dd.style.display === 'block';
+  dd.style.display = isOpen ? 'none' : 'block';
+  document.getElementById('header-menu-btn').setAttribute('aria-expanded', !isOpen);
 }
 
 document.addEventListener('click', function(e) {
@@ -652,12 +971,14 @@ document.addEventListener('click', function(e) {
   var btn = document.getElementById('header-menu-btn');
   if (dd && btn && !dd.contains(e.target) && !btn.contains(e.target)) {
     dd.style.display = 'none';
+    btn.setAttribute('aria-expanded', 'false');
   }
 });
 
 // ── Inline title editing ─────────────────────────────────────────
 function editTitle() {
   document.getElementById('header-dropdown').style.display = 'none';
+  document.getElementById('header-menu-btn').setAttribute('aria-expanded', 'false');
   document.getElementById('session-title-display').style.display = 'none';
   document.getElementById('title-form').style.display = 'flex';
   document.getElementById('title-input').focus();
@@ -671,6 +992,7 @@ function cancelEditTitle() {
 
 function showTurnsInput() {
   document.getElementById('header-dropdown').style.display = 'none';
+  document.getElementById('header-menu-btn').setAttribute('aria-expanded', 'false');
 }
 
 // ── Left Sidebar ─────────────────────────────────────────────────
@@ -679,24 +1001,494 @@ function toggleSidePanel() {
   var btn = document.getElementById('side-toggle-btn');
   panel.classList.toggle('open');
   btn.textContent = panel.classList.contains('open') ? '◀' : '▶';
+  btn.setAttribute('aria-label', panel.classList.contains('open') ? 'Close sidebar' : 'Open sidebar');
 }
 
 function stopAllAgents() {
+  if (!window.confirm('Stop every agent currently working in this session?')) return;
   var rows = document.querySelectorAll('.sp-agent-row');
+  var names = [];
   rows.forEach(function(row) {
     var name = row.getAttribute('data-agent');
-    if (!name) return;
-    var form = document.createElement('form');
-    form.method = 'POST';
-    form.action = '/sessions/' + sessionId + '/stop-agent';
-    var input = document.createElement('input');
-    input.type = 'hidden';
-    input.name = 'agent_name';
-    input.value = name;
-    form.appendChild(input);
-    document.body.appendChild(form);
-    form.submit();
+    if (name) names.push(name);
+  });
+  fetch('/sessions/' + sessionId + '/stop-all-agents', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-Token': getCsrfToken()},
+    body: JSON.stringify({agent_names: names})
+  }).then(function(response) {
+    if (!response.ok) throw new Error('stop-all failed');
+    return response.json();
+  }).then(function() {
+    pollAgentStatus();
+  }).catch(function() {});
+}
+
+// ── Tool confirmation bubble click handler ──────────────────────────
+// Replaces inline onclick with a delegated event listener using
+// data attributes.  Pending bubbles are disabled (no click action);
+// resolved bubbles open the tool detail panel.
+document.addEventListener('click', function(e) {
+  var bubble = e.target.closest('[data-invocation-id]');
+  if (!bubble) return;
+  var stillPending = bubble.getAttribute('data-still-pending') === 'true';
+  if (stillPending) return;
+  var invId = bubble.getAttribute('data-invocation-id');
+  if (invId) openToolPanel(invId);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 1. Keyboard Shortcuts Overlay
+// ═══════════════════════════════════════════════════════════════════════════
+
+var _shortcutsOpen = false;
+var _priorFocusEl = null;
+
+function openShortcutsOverlay() {
+  _priorFocusEl = document.activeElement;
+  var overlay = document.getElementById('shortcuts-overlay');
+  if (!overlay) return;
+  overlay.style.display = 'flex';
+  _shortcutsOpen = true;
+  var closeBtn = document.getElementById('shortcuts-close');
+  if (closeBtn) closeBtn.focus();
+  // Platform-sensitive labels
+  var isMac = navigator.platform && navigator.platform.indexOf('Mac') !== -1;
+  var modLabel = document.getElementById('shortcuts-modifier-label');
+  var macLabel = document.getElementById('shortcuts-mac-label');
+  if (modLabel) modLabel.textContent = isMac ? 'Cmd' : 'Ctrl';
+  if (macLabel) macLabel.textContent = isMac ? 'Cmd' : 'Ctrl';
+}
+
+function closeShortcutsOverlay() {
+  var overlay = document.getElementById('shortcuts-overlay');
+  if (!overlay) return;
+  overlay.style.display = 'none';
+  _shortcutsOpen = false;
+  if (_priorFocusEl && typeof _priorFocusEl.focus === 'function') {
+    _priorFocusEl.focus();
+    _priorFocusEl = null;
+  }
+}
+
+// Tab trapping inside shortcuts overlay
+document.addEventListener('keydown', function(e) {
+  if (!_shortcutsOpen) return;
+  if (e.key !== 'Tab') return;
+  var overlay = document.getElementById('shortcuts-overlay');
+  if (!overlay || overlay.style.display === 'none') return;
+  var focusable = overlay.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+  if (focusable.length === 0) return;
+  var first = focusable[0];
+  var last = focusable[focusable.length - 1];
+  if (e.shiftKey) {
+    if (document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    }
+  } else {
+    if (document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 2. Global keyboard handler — Escape priority close, @ focus, ? overlay
+// ═══════════════════════════════════════════════════════════════════════════
+
+document.addEventListener('keydown', function(e) {
+  // ── ? opens shortcuts overlay (outside editable controls) ──
+  if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    var tag = e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target.isContentEditable) {
+      return; // Let the browser handle ? in editable fields
+    }
+    e.preventDefault();
+    if (_shortcutsOpen) {
+      closeShortcutsOverlay();
+    } else {
+      openShortcutsOverlay();
+    }
+    return;
+  }
+
+  // ── Escape: close in priority order ──
+  if (e.key === 'Escape') {
+    // 1. Shortcuts overlay
+    if (_shortcutsOpen) {
+      closeShortcutsOverlay();
+      e.preventDefault();
+      return;
+    }
+    // 2. Autocomplete dropdown
+    var ac = document.getElementById('autocomplete-dd');
+    if (ac && ac.style.display !== 'none') {
+      ac.style.display = 'none';
+      e.preventDefault();
+      return;
+    }
+    // 3. Tool/agent panel
+    var panel = document.getElementById('toolcall-panel');
+    if (panel && panel.classList.contains('open')) {
+      closeToolPanel();
+      e.preventDefault();
+      return;
+    }
+    // 4. Header dropdown
+    var hd = document.getElementById('header-dropdown');
+    if (hd && hd.style.display === 'block') {
+      hd.style.display = 'none';
+      document.getElementById('header-menu-btn').setAttribute('aria-expanded', 'false');
+      e.preventDefault();
+      return;
+    }
+    // 5. Title edit
+    var titleForm = document.getElementById('title-form');
+    if (titleForm && titleForm.style.display !== 'none') {
+      cancelEditTitle();
+      e.preventDefault();
+      return;
+    }
+    // 6. Persistent left session panel
+    var side = document.getElementById('side-panel-left');
+    if (side && side.classList.contains('open')) {
+      toggleSidePanel();
+      e.preventDefault();
+      return;
+    }
+    // Escape does NOT cancel/stop a running agent
+    return;
+  }
+
+  // ── @ global shortcut: focus chat input (outside editable controls) ──
+  if (e.key === '@' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    var tag = e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target.isContentEditable) {
+      return; // Let @ through naturally in editable fields
+    }
+    e.preventDefault();
+    var chatInput = document.getElementById('chat-input');
+    if (chatInput) {
+      chatInput.focus();
+      var start = chatInput.selectionStart == null ? chatInput.value.length : chatInput.selectionStart;
+      var end = chatInput.selectionEnd == null ? start : chatInput.selectionEnd;
+      chatInput.value = chatInput.value.slice(0, start) + '@' + chatInput.value.slice(end);
+      chatInput.setSelectionRange(start + 1, start + 1);
+      chatInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    return;
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 3. Asset Drop/Upload
+// ═══════════════════════════════════════════════════════════════════════════
+
+function setupAssetUpload() {
+  var dropzone = document.getElementById('asset-dropzone');
+  var fileInput = document.getElementById('asset-file-input');
+  if (!dropzone || !fileInput) return;
+
+  var sessionId = dropzone.getAttribute('data-session-id');
+  if (!sessionId) return;
+
+  // Click to open file picker
+  dropzone.addEventListener('click', function() {
+    fileInput.click();
+  });
+
+  // Keyboard activation
+  dropzone.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      fileInput.click();
+    }
+  });
+
+  // File selected via picker
+  fileInput.addEventListener('change', function() {
+    if (fileInput.files && fileInput.files.length > 0) {
+      uploadAsset(sessionId, fileInput.files[0]);
+    }
+    fileInput.value = ''; // Reset so same file can be re-uploaded
+  });
+
+  // Drag events
+  dropzone.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    dropzone.classList.add('drag-over');
+  });
+
+  dropzone.addEventListener('dragleave', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    dropzone.classList.remove('drag-over');
+  });
+
+  dropzone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    dropzone.classList.remove('drag-over');
+    var files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      // One file per request
+      uploadAsset(sessionId, files[0]);
+    }
   });
 }
+
+function uploadAsset(sessionId, file) {
+  if (!file) return;
+  var progressEl = document.getElementById('upload-progress');
+  var statusEl = document.getElementById('upload-status');
+  var dropzoneContent = document.getElementById('dropzone-content');
+
+  // Show progress
+  if (progressEl) progressEl.style.display = 'block';
+  if (statusEl) statusEl.textContent = 'Uploading ' + file.name + '…';
+  if (dropzoneContent) dropzoneContent.style.display = 'none';
+
+  var formData = new FormData();
+  formData.append('file', file);
+
+  fetch('/sessions/' + encodeURIComponent(sessionId) + '/assets/upload', {
+    method: 'POST',
+    body: formData,
+    headers: {
+      'X-CSRF-Token': getCsrfToken()
+    }
+  }).then(function(response) {
+    if (!response.ok) {
+      throw new Error('Upload failed (' + response.status + ')');
+    }
+    return response.json();
+  }).then(function(data) {
+    // Hide progress
+    if (progressEl) progressEl.style.display = 'none';
+    if (dropzoneContent) dropzoneContent.style.display = '';
+
+    appendUploadedAsset(data);
+    if (statusEl) statusEl.textContent = 'Uploaded ' + file.name;
+  }).catch(function(err) {
+    if (progressEl) progressEl.style.display = 'none';
+    if (dropzoneContent) dropzoneContent.style.display = '';
+    if (statusEl) statusEl.textContent = 'Upload failed: ' + (err.message || 'unknown error');
+    if (statusEl) statusEl.style.color = 'var(--danger)';
+    setTimeout(function() {
+      if (statusEl) statusEl.textContent = '';
+      if (statusEl) statusEl.style.color = '';
+    }, 4000);
+  });
+}
+
+function appendUploadedAsset(data) {
+  var assetList = document.getElementById('sp-asset-list');
+  if (!assetList || !data || !data.asset_id) return;
+  var placeholder = assetList.querySelector('.sp-asset-placeholder');
+  if (placeholder) placeholder.remove();
+
+  var row = document.createElement('div');
+  row.className = 'sp-asset-row';
+  row.setAttribute('data-asset-id', data.asset_id);
+
+  var icon = document.createElement('span');
+  icon.className = 'sp-asset-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = '📄';
+
+  var label = document.createElement('span');
+  label.className = 'sp-asset-label truncate';
+  label.textContent = data.label || data.path || 'Uploaded file';
+
+  var badge = document.createElement('span');
+  badge.className = 'sp-asset-type-badge';
+  badge.textContent = data.asset_type || 'file';
+
+  row.appendChild(icon);
+  row.appendChild(label);
+  row.appendChild(badge);
+  assetList.appendChild(row);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 4. Pagination — Load Earlier Messages
+// ═══════════════════════════════════════════════════════════════════════════
+
+var _loadingEarlier = false;
+
+function setupLoadEarlier() {
+  var btn = document.getElementById('load-earlier-btn');
+  var retryBtn = document.getElementById('load-earlier-retry');
+  var errorEl = document.getElementById('load-earlier-error');
+  var list = document.getElementById('message-list');
+  if (!btn || !list) return;
+
+  function loadEarlier() {
+    if (_loadingEarlier) return;
+    var cursor = btn.getAttribute('data-cursor');
+    if (!cursor) return;
+    var sessionId = list.getAttribute('data-session-id');
+    if (!sessionId) return;
+
+    _loadingEarlier = true;
+    btn.disabled = true;
+    btn.textContent = 'Loading…';
+    if (errorEl) errorEl.style.display = 'none';
+
+    // Preserve the first already-visible message as a stable viewport anchor.
+    // Unlike scroll-height arithmetic this is unaffected if SSE appends a new
+    // message at the bottom while the older-page request is in flight.
+    var thread = document.getElementById('message-thread');
+    var anchorMessage = list.querySelector('.msg');
+    var anchorTop = anchorMessage ? anchorMessage.getBoundingClientRect().top : null;
+
+    fetch('/messages/list/' + encodeURIComponent(sessionId) + '/before?before=' + encodeURIComponent(cursor) + '&limit=50', {
+      cache: 'no-store',
+      headers: { 'X-Requested-With': 'fetch' }
+    }).then(function(response) {
+      if (!response.ok) throw new Error('Failed to load');
+      return response.json();
+    }).then(function(data) {
+      _loadingEarlier = false;
+      btn.disabled = false;
+      btn.textContent = '↑ Load earlier';
+
+      if (data.html) {
+        // Remove the load-earlier-wrap from DOM temporarily
+        var wrap = btn.closest('.load-earlier-wrap');
+        // Keep the control at the top and insert the older page directly
+        // after it, before the messages already present.
+        if (wrap) {
+          wrap.insertAdjacentHTML('afterend', data.html);
+        } else {
+          list.insertAdjacentHTML('afterbegin', data.html);
+        }
+
+        // Preserve viewport anchor: keep the first existing message fixed.
+        if (thread && anchorMessage && anchorTop !== null) {
+          thread.scrollTop += anchorMessage.getBoundingClientRect().top - anchorTop;
+        }
+      }
+      if (data.next_cursor) btn.setAttribute('data-cursor', data.next_cursor);
+      if (data.has_more === false) {
+        var currentWrap = btn.closest('.load-earlier-wrap');
+        if (currentWrap) currentWrap.style.display = 'none';
+      }
+    }).catch(function(err) {
+      _loadingEarlier = false;
+      btn.disabled = false;
+      btn.textContent = '↑ Load earlier';
+      if (errorEl) {
+        errorEl.style.display = 'block';
+        errorEl.textContent = 'Failed to load. ';
+        var retryLink = document.createElement('button');
+        retryLink.type = 'button';
+        retryLink.className = 'btn-link';
+        retryLink.style.cssText = 'font-size:11px;color:var(--accent);cursor:pointer;border:none;background:none;padding:0;text-decoration:underline;';
+        retryLink.textContent = 'Retry';
+        retryLink.onclick = loadEarlier;
+        errorEl.appendChild(retryLink);
+      }
+    });
+  }
+
+  btn.addEventListener('click', loadEarlier);
+  if (retryBtn) retryBtn.addEventListener('click', loadEarlier);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 5. Smart Newest-Step Following (Live Panel)
+// ═══════════════════════════════════════════════════════════════════════════
+
+var _livePanelFollowEnabled = true;
+var _livePanelFollowThreshold = 48;
+
+// Override _renderLivePanel to add smart follow
+var _origRenderLivePanel = _renderLivePanel;
+_renderLivePanel = function() {
+  var body = document.getElementById('toolcall-body');
+  if (!body) { _origRenderLivePanel(); return; }
+
+  // Check if user is near bottom
+  var nearBottom = (body.scrollHeight - body.scrollTop - body.clientHeight) < _livePanelFollowThreshold;
+
+  if (!nearBottom && _livePanelMode) {
+    // User scrolled up — disable follow
+    _livePanelFollowEnabled = false;
+  }
+
+  if (nearBottom && !_livePanelFollowEnabled) {
+    // User scrolled back near bottom — re-enable
+    _livePanelFollowEnabled = true;
+  }
+
+  // Call original render
+  _origRenderLivePanel();
+
+  // If follow is enabled, scroll to bottom
+  if (_livePanelFollowEnabled && _livePanelMode) {
+    body.scrollTop = body.scrollHeight;
+  }
+};
+
+// Override openLiveWorkPanel to start at newest/bottom
+var _origOpenLiveWorkPanel = openLiveWorkPanel;
+openLiveWorkPanel = function(agentName) {
+  _livePanelFollowEnabled = true;
+  _origOpenLiveWorkPanel(agentName);
+  // Ensure we scroll to bottom after opening
+  var body = document.getElementById('toolcall-body');
+  if (body) {
+    // Small delay to let render complete
+    setTimeout(function() {
+      body.scrollTop = body.scrollHeight;
+    }, 50);
+  }
+};
+
+// Override _selectLiveAgent to start at newest
+var _origSelectLiveAgent = _selectLiveAgent;
+_selectLiveAgent = function(agentName) {
+  _livePanelFollowEnabled = true;
+  _origSelectLiveAgent(agentName);
+  var body = document.getElementById('toolcall-body');
+  if (body) {
+    setTimeout(function() {
+      body.scrollTop = body.scrollHeight;
+    }, 50);
+  }
+};
+
+// Add scroll listener to live panel body for follow detection
+(function() {
+  var body = document.getElementById('toolcall-body');
+  if (!body) return;
+  body.addEventListener('scroll', function() {
+    if (!_livePanelMode) return;
+    var nearBottom = (body.scrollHeight - body.scrollTop - body.clientHeight) < _livePanelFollowThreshold;
+    if (nearBottom) {
+      _livePanelFollowEnabled = true;
+    } else {
+      _livePanelFollowEnabled = false;
+    }
+  });
+})();
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Initialization
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Extend DOMContentLoaded to set up new features
+var _origDomReady = null;
+(function() {
+  var existingReady = document.addEventListener;
+  document.addEventListener('DOMContentLoaded', function() {
+    setupAssetUpload();
+    setupLoadEarlier();
+  });
+})();
 </script>
 {% endblock %}

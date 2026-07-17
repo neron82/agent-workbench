@@ -47,7 +47,11 @@ def bubble_role(message) -> str:
     return "agent"
 
 
-def bubble_initials(message, participants: Optional[Mapping[str, str]] = None) -> str:
+def bubble_initials(
+    message,
+    participants: Optional[Mapping[str, str]] = None,
+    users: Optional[Mapping[str, str]] = None,
+) -> str:
     """Return 1–2 character initials for the bubble avatar.
 
     * ``user``     -> ``"U"``
@@ -60,14 +64,18 @@ def bubble_initials(message, participants: Optional[Mapping[str, str]] = None) -
         return "U"
     if role == "system":
         return "S"
-    name = bubble_display_name(message, participants) or "agent"
+    name = bubble_display_name(message, participants, users) or "agent"
     name = name.strip()
     if not name:
         return "A"
     return name[0].upper()
 
 
-def bubble_display_name(message, participants: Optional[Mapping[str, str]] = None) -> str:
+def bubble_display_name(
+    message,
+    participants: Optional[Mapping[str, str]] = None,
+    users: Optional[Mapping[str, str]] = None,
+) -> str:
     """Return a human-readable display name for a message's source.
 
     For agent/orchestrator/worker sources we look up ``source_id`` in the
@@ -82,7 +90,8 @@ def bubble_display_name(message, participants: Optional[Mapping[str, str]] = Non
     source_type = getattr(message, "source_type", None) or ""
     source_id = getattr(message, "source_id", None) or ""
     if source_type == "user":
-        return source_id or "user"
+        users = users or {}
+        return users.get(source_id, source_id or "user")
     if source_type == "system":
         return "System"
 

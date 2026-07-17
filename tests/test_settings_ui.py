@@ -26,7 +26,8 @@ def app(tmp_path: Path, monkeypatch):
 
 @pytest.fixture
 def client(app):
-    return app.test_client()
+    from tests.conftest import make_csrf_client
+    return make_csrf_client(app)
 
 
 def _boot_workspace(client):
@@ -113,8 +114,6 @@ def test_test_and_fetch_models_returns_error_on_unreachable(client):
 def test_test_and_fetch_models_parses_openai_style_response(client, monkeypatch):
     import json
     import urllib.request
-
-    original_urlopen = urllib.request.urlopen
 
     def fake_urlopen(req, **kw):
         class FakeResp:

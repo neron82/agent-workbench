@@ -118,27 +118,32 @@ class CrossHarnessPermissionRepository:
         session_id: str,
         agent_harness_type: Optional[str],
         tool_harness_type: str,
+        require_permanent: bool = False,
     ) -> bool:
         """Return True if a permission row exists for this pair.
 
         Either a specific ``(session, agent_harness, tool_harness)``
         row OR a global ``(session, NULL, tool_harness)`` row counts.
+
+        When ``require_permanent=True``, only 'permanent' rows match;
+        'once' rows are ignored (they are consumed during dispatch).
         """
+        decision_filter = "AND decision = 'permanent'" if require_permanent else ""
         # Try the specific match first.
         if agent_harness_type is not None:
             row = self.conn.execute(
-                "SELECT 1 FROM cross_harness_permissions "
+                f"SELECT 1 FROM cross_harness_permissions "
                 "WHERE session_id = ? AND agent_harness_type = ? "
-                "AND tool_harness_type = ?",
+                f"AND tool_harness_type = ? {decision_filter}",
                 (session_id, agent_harness_type, tool_harness_type),
             ).fetchone()
             if row is not None:
                 return True
         # Then the global match (any agent).
         row = self.conn.execute(
-            "SELECT 1 FROM cross_harness_permissions "
+            f"SELECT 1 FROM cross_harness_permissions "
             "WHERE session_id = ? AND agent_harness_type IS NULL "
-            "AND tool_harness_type = ?",
+            f"AND tool_harness_type = ? {decision_filter}",
             (session_id, tool_harness_type),
         ).fetchone()
         return row is not None
@@ -150,27 +155,47 @@ class CrossHarnessPermissionRepository:
         agent_harness_type: Optional[str],
         tool_harness_type: str,
     ) -> int:
-        """Delete all 'once' rows for this pair.  Returns count removed.
+        """Atomically delete exactly one matching ``once`` grant.
+
+        The candidate lookup and deletion are one SQLite write statement, so
+        concurrent connections cannot both report consuming the same row.
+        A harness-specific grant takes precedence over a global grant.
+        Returns 1 if a row was deleted, otherwise 0.
 
         'permanent' rows are kept; only 'once' rows go away so the user
         has to re-confirm for each individual call.
         """
         if agent_harness_type is None:
-            specific = self.conn.execute(
+            row = self.conn.execute(
                 "DELETE FROM cross_harness_permissions "
+                "WHERE permission_id = ("
+                "SELECT permission_id FROM cross_harness_permissions "
                 "WHERE session_id = ? AND agent_harness_type IS NULL "
-                "AND tool_harness_type = ? AND decision = 'once'",
+                "AND tool_harness_type = ? AND decision = 'once' "
+                "ORDER BY created_at ASC LIMIT 1"
+                ") RETURNING permission_id",
                 (session_id, tool_harness_type),
-            )
+            ).fetchone()
         else:
-            specific = self.conn.execute(
+            row = self.conn.execute(
                 "DELETE FROM cross_harness_permissions "
-                "WHERE session_id = ? AND agent_harness_type = ? "
-                "AND tool_harness_type = ? AND decision = 'once'",
-                (session_id, agent_harness_type, tool_harness_type),
-            )
+                "WHERE permission_id = ("
+                "SELECT permission_id FROM cross_harness_permissions "
+                "WHERE session_id = ? AND tool_harness_type = ? "
+                "AND decision = 'once' "
+                "AND (agent_harness_type = ? OR agent_harness_type IS NULL) "
+                "ORDER BY CASE WHEN agent_harness_type = ? THEN 0 ELSE 1 END, "
+                "created_at ASC LIMIT 1"
+                ") RETURNING permission_id",
+                (
+                    session_id,
+                    tool_harness_type,
+                    agent_harness_type,
+                    agent_harness_type,
+                ),
+            ).fetchone()
         self.conn.commit()
-        return specific.rowcount
+        return 1 if row is not None else 0
 
     def list_for_session(
         self, session_id: str

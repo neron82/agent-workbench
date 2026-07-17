@@ -8,8 +8,8 @@
    4. Agent work steps — single bubble per agent, click to open side panel
    ------------------------------------------------------------------------- #}
 {% set role = bubble_role(message) %}
-{% set name = bubble_display_name(message, participants or {}) %}
-{% set initials = bubble_initials(message, participants or {}) %}
+{% set name = bubble_display_name(message, participants or {}, users or {}) %}
+{% set initials = bubble_initials(message, participants or {}, users or {}) %}
 {% set _payload = (message.payload_ref and (message.payload_ref | string)) or '' %}
 {% set _parsed = {} %}
 {% if _payload %}
@@ -57,7 +57,7 @@
   {% set _inv_id = _parsed.get('invocation_id', '') %}
   {% set _still_pending = _inv_id in (pending_invocation_ids or []) %}
   <div class="msg msg-toolcall" data-id="{{ message.routed_message_id }}" data-created-at="{{ message.created_at }}">
-    <div class="msg-bubble" onclick="{% if _still_pending %}return{% else %}openToolPanel('{{ _inv_id }}'){% endif %}">
+    <div class="msg-bubble" data-invocation-id="{{ _inv_id }}" data-still-pending="{{ 'true' if _still_pending else 'false' }}">
       <div class="toolcall-summary">
         <span class="toolcall-icon toolcall-icon-{{ _parsed.get('tool_harness_type', 'shell') }}">⚡</span>
         <span class="toolcall-name">{{ _parsed.get('tool_name', '?') }}</span>
@@ -73,6 +73,7 @@
       {% if _still_pending %}
         <div class="toolcall-confirm-row">
           <form method="post" action="{{ url_for('sessions.confirm_tool_call', session_id=session_id) }}" class="inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="invocation_id" value="{{ _inv_id }}">
             <button type="submit" name="decision" value="no" class="btn btn-sm btn-danger">Deny</button>
             <button type="submit" name="decision" value="yes_once" class="btn btn-sm btn-primary">Allow once</button>
@@ -89,7 +90,7 @@
 {% elif _parsed.get('envelope') == 'tool_result' %}
   {% set _inv_id = _parsed.get('invocation_id', '') %}
   <div class="msg msg-toolcall" data-id="{{ message.routed_message_id }}" data-created-at="{{ message.created_at }}">
-    <div class="msg-bubble" onclick="openToolPanel('{{ _inv_id }}')">
+    <div class="msg-bubble" data-invocation-id="{{ _inv_id }}" data-still-pending="false">
       <div class="toolcall-summary">
         <span class="toolcall-icon toolcall-icon-{{ _parsed.get('tool_harness_type', 'shell') }}">⚡</span>
         <span class="toolcall-name">{{ _parsed.get('tool_name', '?') }}</span>

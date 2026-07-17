@@ -59,7 +59,9 @@ class EventRecordRepository:
             ),
         )
         self.conn.commit()
-        return self.get_by_id(event_id)
+        result = self.get_by_id(event_id)
+        assert result is not None
+        return result
 
     def get_by_id(self, event_id: str) -> Optional[EventRecord]:
         row = self.conn.execute(

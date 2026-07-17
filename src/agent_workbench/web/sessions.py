@@ -4,34 +4,42 @@ from __future__ import annotations
 
 import json
 import re
-from typing import List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from flask import (
     Blueprint,
+    Response,
     abort,
     current_app,
     flash,
+    g,
+    jsonify,
     redirect,
     render_template,
     request,
     url_for,
 )
+from werkzeug.utils import secure_filename
 
-from agent_workbench.models.agent_profile_binding import AgentProfileBindingRepository
-from agent_workbench.models.channel import ChannelRepository
-from agent_workbench.models.harness_run import HarnessRunRepository
+from agent_workbench.models.agent_profile_binding import AgentProfileBinding, AgentProfileBindingRepository
+from agent_workbench.models.channel import Channel
+from agent_workbench.models.project_asset import ProjectAssetRepository
 from agent_workbench.models.session_extension import (
     SESSION_STATUSES,
+    SessionExtension,
     SessionExtensionRepository,
 )
+from agent_workbench.models.session_label import SessionLabelRepository
 from agent_workbench.models.task_spec import TaskSpecRepository
 from agent_workbench.services.agent_runtime_service import (
     AgentRuntimeService,
     launch_agent_responses_async,
 )
+from agent_workbench.services.agent_status import AgentStep
 from agent_workbench.services.profile_service import ProfileNotFoundError, ProfileService
+from agent_workbench.services.participant_transfer_service import ParticipantTransferService
 from agent_workbench.services.routing_service import (
-    RoutingService,
     SOURCE_TYPE_USER,
     TARGET_TYPE_ORCHESTRATOR,
 )
@@ -40,6 +48,7 @@ from agent_workbench.services.session_service import (
     SessionNotFoundError,
     SessionService,
 )
+from agent_workbench.services.team_service import TeamService
 from agent_workbench.web.app import (
     get_db,
     get_orchestrator,
@@ -47,12 +56,12 @@ from agent_workbench.web.app import (
     get_routing_service,
     get_session_service,
 )
-from agent_workbench.web.messages import visible_messages_for_session
+from agent_workbench.web.messages import _load_participant_index, _load_user_index, visible_messages_for_session
 
 bp = Blueprint("sessions", __name__)
 
 
-def _get_session_or_404(session_id: str):
+def _get_session_or_404(session_id: str) -> SessionExtension:
     repo = SessionExtensionRepository(get_db())
     sess = repo.get_by_id(session_id)
     if sess is None:
@@ -60,7 +69,7 @@ def _get_session_or_404(session_id: str):
     return sess
 
 
-def _resolve_channel_for_session(session) -> Optional[object]:
+def _resolve_channel_for_session(session) -> Optional[Channel]:
     """Return the channel whose ``active_session_id`` matches *session*.
 
     Uses a direct SQL query instead of iterating all channels in the
@@ -77,7 +86,7 @@ def _resolve_channel_for_session(session) -> Optional[object]:
     return Channel(**dict(row))
 
 
-def _resolve_binding(session) -> Optional[object]:
+def _resolve_binding(session) -> Optional[AgentProfileBinding]:
     repo = AgentProfileBindingRepository(get_db())
     return repo.get_latest_for_session(session.session_id)
 
@@ -96,6 +105,19 @@ def _parse_agent_mention(body: str) -> Optional[str]:
     if m:
         return m.group(1)
     return None
+
+
+def _parse_agent_mentions(body: str) -> List[str]:
+    """Return unique @agent names in message order."""
+    names = re.findall(r"(?:^|\s)@(\w[\w-]*)", body)
+    seen = set()
+    result = []
+    for name in names:
+        key = name.lower()
+        if key not in seen:
+            seen.add(key)
+            result.append(name)
+    return result
 
 
 @bp.route("/sessions/<session_id>/config", methods=["GET"])
@@ -125,15 +147,20 @@ def show_session(session_id: str):
     channel = _resolve_channel_for_session(session)
     is_work = session.session_type == "work"
     participants = get_participant_service().list_active_participant_details(session_id)
-    messages = visible_messages_for_session(session_id)
+
+    # Load only the latest 50 visible messages using the paginated query
+    from agent_workbench.models.routed_message import RoutedMessageRepository
+    repo = RoutedMessageRepository(get_db())
+    messages, oldest_cursor, has_earlier = repo.list_visible_before(
+        session_id, limit=50,
+    )
 
     # Run-Liste + Start-Picker (aditive UI-Schicht).
     run_service = RunService(get_db())
     session_runs = run_service.list_for_session(session_id)
     available_harness_types = run_service.available_harness_types()
 
-    # TaskSpec-Picker: alle approved Specs des Workspaces (work-Sessions)
-    # bzw. alle Specs (chat/research) für ad-hoc-Bindung.
+    # TaskSpec-Picker
     spec_repo = TaskSpecRepository(get_db())
     workspace_specs = spec_repo.list_by_workspace(session.workspace_id)
     if is_work:
@@ -149,11 +176,35 @@ def show_session(session_id: str):
         for inv in inv_repo.list_pending_confirmation(session_id)
     }
 
+    # Session labels for the session type
+    label_repo = SessionLabelRepository(get_db())
+    labels = label_repo.list_by_workspace(session.workspace_id)
+    label_display = {}
+    label_colors = {}
+    label_descriptions = {}
+    for lbl in labels:
+        label_display[lbl.name] = lbl.display_name or lbl.name
+        label_colors[lbl.name] = lbl.color
+        label_descriptions[lbl.name] = lbl.description
+
+    # Project assets for this workspace
+    asset_repo = ProjectAssetRepository(get_db())
+    project_assets = asset_repo.list_by_workspace(session.workspace_id)
+
+    current_user_id = g.current_user.user_id
+    current_user_display = g.current_user.display_name
+    from agent_workbench.models.workspace import WorkspaceRepository
+    workspace = WorkspaceRepository(get_db()).get_by_id(session.workspace_id)
+    teams = TeamService(get_db()).list_teams(session.workspace_id)
+
     return render_template(
         "session_view.html",
         session=session,
         session_id=session_id,
         messages=messages,
+        has_earlier_messages=has_earlier,
+        oldest_message_cursor=oldest_cursor,
+        users=_load_user_index(),
         binding=binding,
         channel=channel,
         is_work=is_work,
@@ -164,6 +215,14 @@ def show_session(session_id: str):
         available_harness_types=available_harness_types,
         eligible_specs=eligible_specs,
         pending_invocation_ids=pending_invocation_ids,
+        session_label_display=label_display,
+        session_label_colors=label_colors,
+        session_label_descriptions=label_descriptions,
+        project_assets=project_assets,
+        current_user_id=current_user_id,
+        current_user_display=current_user_display,
+        workspace=workspace,
+        teams=teams,
     )
 
 
@@ -199,6 +258,29 @@ def remove_participant(session_id: str, participant_id: str):
     return redirect(url_for("sessions.show_session", session_id=session_id))
 
 
+@bp.route("/sessions/<session_id>/teams/<team_id>/apply", methods=["POST"])
+def apply_team(session_id: str, team_id: str):
+    session = _get_session_or_404(session_id)
+    team_service = TeamService(get_db())
+    team = team_service.get_team(team_id)
+    if team is None or team.workspace_id != session.workspace_id:
+        abort(404)
+    added = 0
+    participant_service = get_participant_service()
+    for member in team_service.list_members(team_id):
+        before = len(participant_service.list_active_participants(session_id))
+        participant_service.add_participant(
+            session_id=session_id,
+            agent_profile_id=member.agent_profile_id,
+            participant_role="member",
+            added_by="system",
+        )
+        after = len(participant_service.list_active_participants(session_id))
+        added += int(after > before)
+    flash(f"Applied team {team.name!r}: {added} agent(s) added.", "success")
+    return redirect(url_for("sessions.show_session", session_id=session_id))
+
+
 @bp.route("/sessions/<session_id>/message", methods=["POST"])
 def post_message(session_id: str):
     session = _get_session_or_404(session_id)
@@ -208,7 +290,7 @@ def post_message(session_id: str):
         flash("Message body cannot be empty.", "error")
         return redirect(url_for("sessions.show_session", session_id=session_id))
 
-    user_id = request.form.get("user_id", "web-user")
+    user_id = g.current_user.user_id
     message_kind = request.form.get("message_kind", "conversation")
 
     routing = get_routing_service()
@@ -217,8 +299,13 @@ def post_message(session_id: str):
         orch = get_orchestrator()
         channel = orch.create_channel(
             workspace_id=session.workspace_id,
-            channel_kind="system",
+            channel_kind=session.session_type,
             title="web-default",
+            default_target=None,
+        )
+        orch.channels.update_active_session(
+            channel.channel_id,
+            active_session_id=session.session_id,
         )
     payload = {
         "envelope": "user_web_post",
@@ -226,14 +313,19 @@ def post_message(session_id: str):
         "from": user_id,
     }
 
-    # Parse @agent_name from the message body
-    target_agent_name = _parse_agent_mention(body)
-    # If the user typed @agent_name, strip it from the body sent to the LLM
+    explicit_targets = [
+        name.strip() for name in request.form.getlist("target_agents") if name.strip()
+    ]
+    mentioned_targets = _parse_agent_mentions(body) if not explicit_targets else []
+    target_agent_names = explicit_targets or mentioned_targets
+    target_agent_name = target_agent_names[0] if len(target_agent_names) == 1 else None
+    # Addressing tokens are routing syntax, so strip mention-derived tokens
+    # from the LLM input while preserving the original visible message.
     clean_body = body
-    if target_agent_name:
-        # Remove @target_agent_name from the body (case-insensitive)
-        pattern = re.compile(r"\B@" + re.escape(target_agent_name) + r"\b", re.IGNORECASE)
-        clean_body = pattern.sub("", body).strip()
+    for mentioned_name in mentioned_targets:
+        pattern = re.compile(r"\B@" + re.escape(mentioned_name) + r"\b", re.IGNORECASE)
+        clean_body = pattern.sub("", clean_body)
+    clean_body = clean_body.strip()
 
     try:
         routing.route_message(
@@ -249,14 +341,19 @@ def post_message(session_id: str):
         )
         participants = get_participant_service().list_active_participant_details(session_id)
 
-        # Filter to only the mentioned agent, or dispatch to all
-        if target_agent_name:
+        # Filter to the explicitly selected/mentioned subset, or all.
+        if target_agent_names:
+            target_keys = {name.lower() for name in target_agent_names}
             filtered = [
                 p for p in participants
-                if p["agent_name"].lower() == target_agent_name.lower()
+                if p["agent_name"].lower() in target_keys
             ]
-            if not filtered:
-                flash(f"Agent {target_agent_name!r} not found in this session.", "error")
+            found_keys = {p["agent_name"].lower() for p in filtered}
+            missing = [
+                name for name in target_agent_names if name.lower() not in found_keys
+            ]
+            if missing:
+                flash(f"Agent target(s) not found: {', '.join(missing)}.", "error")
                 return redirect(url_for("sessions.show_session", session_id=session_id))
             dispatch_targets = filtered
         else:
@@ -287,6 +384,7 @@ def post_message(session_id: str):
                     user_body=clean_body,
                     user_id=user_id,
                     target_agent_name=target_agent_name,
+                    target_agent_names=target_agent_names or None,
                 )
             else:
                 launch_agent_responses_async(
@@ -295,6 +393,7 @@ def post_message(session_id: str):
                     user_body=clean_body,
                     user_id=user_id,
                     target_agent_name=target_agent_name,
+                    target_agent_names=target_agent_names or None,
                 )
     except ValueError as e:
         flash(f"Routing rejected the message: {e}", "error")
@@ -312,6 +411,9 @@ def update_status(session_id: str):
 
     try:
         session_svc.update_session_status(session_id, status=new_status)
+        if new_status == "archived":
+            from agent_workbench.services.agent_status import AgentStatusTracker
+            AgentStatusTracker.get_instance().cleanup_session(session_id)
     except (SessionNotFoundError, ValueError) as e:
         abort(400, description=str(e))
 
@@ -367,24 +469,379 @@ def update_max_auto_turns(session_id: str):
     return redirect(url_for("sessions.session_config", session_id=session_id))
 
 
+@bp.route("/sessions/<session_id>/transfer", methods=["POST"])
+def transfer_session(session_id: str):
+    """Fork a session and copy the selected active participants."""
+    source = _get_session_or_404(session_id)
+    participant_ids = request.form.getlist("participant_ids") or None
+    try:
+        target, transfer = ParticipantTransferService(get_db()).transfer_to_new_session(
+            source_session_id=session_id,
+            session_type=(request.form.get("session_type") or source.session_type).strip(),
+            title=(request.form.get("title") or "").strip() or None,
+            participant_ids=participant_ids,
+            context_summary=(request.form.get("context_summary") or "").strip(),
+            initiated_by="user",
+        )
+    except (LookupError, ValueError) as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("sessions.session_config", session_id=session_id))
+    flash(f"Continuation session created ({transfer.transfer_id[:8]}…).", "success")
+    return redirect(url_for("sessions.show_session", session_id=target.session_id))
+
+
 @bp.route("/sessions/<session_id>/delete", methods=["POST"])
 def delete_session(session_id: str):
     """Delete a session and all associated data."""
     session_svc: SessionService = get_session_service()
+    # Capture workspace before deletion so we can redirect back to it.
+    from agent_workbench.models.session_extension import SessionExtensionRepository
+    repo = SessionExtensionRepository(get_db())
+    sess = repo.get_by_id(session_id)
+    workspace_id = sess.workspace_id if sess else None
     try:
         session_svc.delete_session(session_id)
         flash("Session deleted.", "success")
     except SessionNotFoundError:
         abort(404, description=f"Session {session_id!r} not found")
+    if workspace_id:
+        return redirect(url_for("channels.index", workspace_id=workspace_id))
     return redirect(url_for("channels.index"))
+
+
+# ── Session export ────────────────────────────────────────────────────
+
+
+@bp.route("/sessions/<session_id>/export", methods=["GET"])
+def export_session(session_id: str):
+    """Export session messages in markdown or JSON format.
+
+    Query parameters:
+        format (str): ``"markdown"`` or ``"json"`` (required).
+
+    Returns a ``Content-Disposition: attachment`` response with a
+    sanitized filename. Only chat-visible messages (non-dispatch) are
+    included, in chronological order.
+    """
+    session = _get_session_or_404(session_id)
+    export_format = (request.args.get("format") or "").strip().lower()
+
+    if export_format not in ("markdown", "json"):
+        abort(400, description="Invalid format. Use 'markdown' or 'json'.")
+
+    messages = visible_messages_for_session(session_id)
+
+    # Build an ASCII-only filename suitable for the WSGI header boundary.
+    base = (session.title or session.session_id[:12]).strip()
+    safe_base = secure_filename(base) or session.session_id[:12]
+    ext = ".md" if export_format == "markdown" else ".json"
+    filename = f"{safe_base}{ext}"
+
+    if export_format == "markdown":
+        body = _render_export_markdown(session, messages)
+        return Response(
+            body,
+            mimetype="text/markdown",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    else:
+        body = _render_export_json(session, messages)
+        return Response(
+            body,
+            mimetype="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+
+def _render_export_markdown(
+    session: SessionExtension,
+    messages: list,
+) -> str:
+    """Render session messages as a Markdown document."""
+    lines: list[str] = []
+    lines.append(f"# Session: {session.title or session.session_id}")
+    lines.append("")
+    lines.append(f"- **ID**: {session.session_id}")
+    lines.append(f"- **Type**: {session.session_type}")
+    lines.append(f"- **Status**: {session.status}")
+    lines.append("")
+
+    # Resolve participant names
+    participants = _load_participant_index(session.session_id)
+    users = _load_user_index()
+
+    for msg in messages:
+        source_type = getattr(msg, "source_type", "") or ""
+        source_id = getattr(msg, "source_id", "") or ""
+        created_at = getattr(msg, "created_at", 0)
+        payload_ref = getattr(msg, "payload_ref", None)
+
+        # Resolve display name
+        if source_type == "user":
+            display = users.get(source_id, source_id or "user")
+        elif source_type in ("agent", "orchestrator", "worker"):
+            display = participants.get(source_id, source_id[:8])
+        elif source_type == "system":
+            display = "System"
+        else:
+            display = source_id or "unknown"
+
+        ts_str = ""
+        if created_at:
+            from datetime import UTC, datetime
+            try:
+                ts_str = datetime.fromtimestamp(float(created_at), UTC).strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"
+                )
+            except (TypeError, ValueError, OSError):
+                ts_str = str(created_at)
+
+        # Extract body text from payload
+        body_text = ""
+        if payload_ref:
+            try:
+                payload = json.loads(payload_ref)
+                if isinstance(payload, dict):
+                    body_value = (
+                        payload["body"] if "body" in payload else payload.get("text", "")
+                    )
+                    if isinstance(body_value, str):
+                        body_text = body_value
+                    elif body_value is not None:
+                        body_text = json.dumps(body_value, ensure_ascii=False, default=str)
+            except (json.JSONDecodeError, TypeError):
+                body_text = payload_ref
+
+        lines.append(f"### {display} — {ts_str}")
+        if body_text:
+            lines.append("")
+            lines.append(body_text)
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _render_export_json(
+    session: SessionExtension,
+    messages: list,
+) -> str:
+    """Render session messages as a JSON document."""
+    participants = _load_participant_index(session.session_id)
+    users = _load_user_index()
+
+    export_messages: list[dict] = []
+    for msg in messages:
+        source_type = getattr(msg, "source_type", "") or ""
+        source_id = getattr(msg, "source_id", "") or ""
+        payload_ref = getattr(msg, "payload_ref", None)
+
+        # Resolve display name
+        if source_type == "user":
+            display = users.get(source_id, source_id or "user")
+        elif source_type in ("agent", "orchestrator", "worker"):
+            display = participants.get(source_id, source_id[:8])
+        elif source_type == "system":
+            display = "System"
+        else:
+            display = source_id or "unknown"
+
+        # Parse payload where possible
+        parsed_payload: dict | str | None = None
+        if payload_ref:
+            try:
+                parsed_payload = json.loads(payload_ref)
+            except (json.JSONDecodeError, TypeError):
+                parsed_payload = payload_ref
+
+        entry = {
+            "routed_message_id": getattr(msg, "routed_message_id", ""),
+            "source_type": source_type,
+            "source_id": source_id,
+            "target_type": getattr(msg, "target_type", ""),
+            "target_id": getattr(msg, "target_id", ""),
+            "message_kind": getattr(msg, "message_kind", ""),
+            "created_at": getattr(msg, "created_at", 0),
+            "display_name": display,
+            "payload": parsed_payload,
+        }
+        export_messages.append(entry)
+
+    doc = {
+        "session": {
+            "session_id": session.session_id,
+            "workspace_id": session.workspace_id,
+            "session_type": session.session_type,
+            "status": session.status,
+            "title": session.title,
+            "created_at": session.created_at,
+        },
+        "messages": export_messages,
+    }
+    return json.dumps(doc, indent=2, ensure_ascii=False, default=str)
+
+
+# ── Managed upload ────────────────────────────────────────────────────
+
+
+@bp.route("/sessions/<session_id>/assets/upload", methods=["POST"])
+def upload_session_file(session_id: str):
+    """Upload a file scoped to a session and workspace.
+
+    Multipart form field ``file`` is required. The file is stored under
+    ``WORKBENCH_UPLOAD_ROOT`` (default ``<project_root>/var/uploads``)
+    with a UUID storage name. A ``project_assets`` row of type ``file``
+    is created with the absolute managed path, the original basename as
+    label, and the session_id set.
+
+    Returns JSON with asset fields for AJAX callers.
+    """
+    session = _get_session_or_404(session_id)
+
+    # Validate the file field
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    file = request.files["file"]
+    original_filename = (file.filename or "").strip()
+
+    if not original_filename:
+        return jsonify({"error": "Empty filename"}), 400
+
+    # Reject directory uploads (trailing / or \)
+    if original_filename.endswith("/") or original_filename.endswith("\\"):
+        return jsonify({"error": "Directory uploads are not allowed"}), 400
+
+    # Reject control characters. Path components are discarded below; the
+    # human-facing basename itself is safe to preserve because storage never
+    # uses it and every UI renderer escapes/text-assigns labels.
+    if any(ord(char) < 32 for char in original_filename):
+        return jsonify({"error": "Invalid filename"}), 400
+
+    display_basename = original_filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if display_basename in {"", ".", ".."}:
+        return jsonify({"error": "Invalid filename"}), 400
+
+    # Resolve upload root
+    upload_root = current_app.config.get(
+        "WORKBENCH_UPLOAD_ROOT",
+        str(Path(__file__).resolve().parents[3] / "var" / "uploads"),
+    )
+    upload_root_path = Path(upload_root).expanduser().resolve()
+    workspace_upload_path = (upload_root_path / session.workspace_id).resolve()
+    try:
+        workspace_upload_path.relative_to(upload_root_path)
+    except ValueError:
+        return jsonify({"error": "Invalid workspace upload path"}), 400
+    workspace_upload_path.mkdir(parents=True, exist_ok=True)
+
+    # Max upload size
+    max_bytes = current_app.config.get("WORKBENCH_MAX_UPLOAD_BYTES", 25 * 1024 * 1024)
+
+    # Generate UUID storage name
+    import uuid
+    storage_name = uuid.uuid4().hex
+    temp_path = workspace_upload_path / f"{storage_name}.tmp"
+    final_path = workspace_upload_path / storage_name
+
+    # Stream to temp file with hard size limit
+    bytes_written = 0
+    try:
+        with open(temp_path, "wb") as f:
+            while True:
+                chunk = file.read(65536)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > max_bytes:
+                    f.close()
+                    temp_path.unlink(missing_ok=True)
+                    return jsonify({"error": f"File too large (max {max_bytes} bytes)"}), 413
+                f.write(chunk)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+    # Atomic rename.  A filesystem error must not strand the temporary file.
+    try:
+        temp_path.rename(final_path)
+    except OSError:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+    # Resolve containment: final_path must be under upload_root_path
+    try:
+        final_path.resolve().relative_to(upload_root_path)
+    except ValueError:
+        final_path.unlink(missing_ok=True)
+        return jsonify({"error": "Path containment violation"}), 400
+
+    managed_path = str(final_path.resolve())
+
+    # Create project_assets row
+    asset_repo = ProjectAssetRepository(get_db())
+    try:
+        asset = asset_repo.create(
+            workspace_id=session.workspace_id,
+            asset_type="file",
+            path=managed_path,
+            label=display_basename,
+            session_id=session.session_id,
+        )
+    except Exception:
+        # DB failure: clean up the file
+        final_path.unlink(missing_ok=True)
+        raise
+
+    return jsonify({
+        "asset_id": asset.asset_id,
+        "path": asset.path,
+        "label": asset.label,
+        "asset_type": asset.asset_type,
+        "session_id": asset.session_id,
+        "workspace_id": asset.workspace_id,
+    })
 
 
 # ── Agent status / stop ────────────────────────────────────────────────
 
 
+# Truncation limit for tool_result in the agent-status poll endpoint.
+# 8,192 characters is generous enough for a useful preview while keeping 1s polling
+# payloads small.  The full result is always available via the invocation
+# detail endpoint.
+_AGENT_STATUS_RESULT_TRUNCATION = 8192
+
+
+def _truncate_result(result: Optional[str], limit: int = _AGENT_STATUS_RESULT_TRUNCATION) -> Optional[str]:
+    """Truncate *result* to *limit* characters, appending a marker."""
+    if result is None:
+        return None
+    if len(result) <= limit:
+        return result
+    return result[:limit] + "\n… [truncated]"
+
+
+def _serialize_step(step: "AgentStep") -> Dict[str, Any]:
+    """Serialize one AgentStep to a JSON-safe dict with truncated result."""
+    return {
+        "iteration": step.iteration,
+        "tool_name": step.tool_name,
+        "tool_arguments": step.tool_arguments,
+        "tool_result": _truncate_result(step.tool_result),
+        "status": step.status,
+        "started_at": step.started_at,
+        "completed_at": step.completed_at,
+    }
+
+
 @bp.route("/sessions/<session_id>/agent-status")
 def agent_status(session_id: str):
-    """Return live agent statuses for a session as JSON."""
+    """Return live agent statuses for a session as JSON.
+
+    Returns every accumulated step per agent (not just current_step),
+    with tool_result truncated to 8,192 characters for bounded 1s polling.
+    ``current_step`` is kept for backward compatibility.
+    """
     from agent_workbench.services.agent_status import AgentStatusTracker
     tracker = AgentStatusTracker.get_instance()
     statuses = tracker.get_session_statuses(session_id)
@@ -394,19 +851,36 @@ def agent_status(session_id: str):
                 "agent_name": s.agent_name,
                 "status": s.status,
                 "iteration_count": s.iteration_count,
-                "current_step": {
-                    "iteration": s.current_step.iteration,
-                    "tool_name": s.current_step.tool_name,
-                    "tool_arguments": s.current_step.tool_arguments,
-                    "tool_result": s.current_step.tool_result,
-                    "status": s.current_step.status,
-                } if s.current_step else None,
+                "current_step": _serialize_step(s.current_step) if s.current_step else None,
+                "steps": [_serialize_step(step) for step in s.steps],
                 "error": s.error,
                 "started_at": s.started_at,
+                "completed_at": s.completed_at,
             }
             for s in statuses
         ]
     }
+
+
+@bp.route("/sessions/<session_id>/stop-all-agents", methods=["POST"])
+def stop_all_agents(session_id: str):
+    """Signal every tracked agent in a session without navigating the page."""
+    _get_session_or_404(session_id)
+    from agent_workbench.services.agent_status import AgentStatusTracker
+
+    tracker = AgentStatusTracker.get_instance()
+    requested = request.get_json(silent=True) or {}
+    names = requested.get("agent_names") if isinstance(requested, dict) else None
+    if not names:
+        names = [s.agent_name for s in tracker.get_session_statuses(session_id)]
+    stopped = []
+    inactive = []
+    for name in dict.fromkeys(str(n).strip() for n in names if str(n).strip()):
+        if tracker.stop_agent(session_id, name):
+            stopped.append(name)
+        else:
+            inactive.append(name)
+    return {"stopped": stopped, "inactive": inactive}
 
 
 @bp.route("/sessions/<session_id>/stop-agent", methods=["POST"])
@@ -471,7 +945,7 @@ def confirm_tool_call(session_id: str):
     from agent_workbench.models.cross_harness_permission import (
         CrossHarnessPermissionRepository,
     )
-    from agent_workbench.models.tool import ToolRepository
+    from agent_workbench.models.tool import PERMISSION_CLASSES, ToolRepository
     from agent_workbench.services.tool_dispatcher import ToolDispatcher
 
     invocation_id = request.form.get("invocation_id", "").strip()
@@ -528,7 +1002,7 @@ def confirm_tool_call(session_id: str):
                 session_id=session_id,
                 payload_ref=payload,
             )
-        flash(f"Tool-Call abgelehnt.", "info")
+        flash("Tool-Call abgelehnt.", "info")
         return redirect(
             url_for("sessions.show_session", session_id=session_id)
         )
@@ -536,15 +1010,60 @@ def confirm_tool_call(session_id: str):
     # yes_once / yes_permanent — record the permission, then re-dispatch.
     cross_perms = CrossHarnessPermissionRepository(conn)
 
-    # The reason stores the agent harness — pull it back out so the
-    # permission row is precise.
     from agent_workbench.services.tool_dispatcher import (
-        extract_agent_harness_from_reason,
         reconstruct_tool_call,
     )
-    agent_harness = extract_agent_harness_from_reason(
-        inv.confirmation_reason or ""
+
+    # Use the stored confirmation context for redispatch, ignoring any
+    # posted session_policy.  If context is missing/malformed, fail
+    # closed without running the adapter.
+    ctx = inv.confirmation_context_json
+    required_context_keys = {
+        "agent_harness_type",
+        "session_policy",
+        "allowed_tool_names",
+    }
+    context_shape_valid = (
+        isinstance(ctx, dict)
+        and required_context_keys.issubset(ctx)
+        and isinstance(ctx.get("agent_harness_type"), str)
+        and bool(ctx.get("agent_harness_type", "").strip())
+        and (
+            ctx.get("session_policy") is None
+            or (
+                isinstance(ctx.get("session_policy"), list)
+                and all(
+                    isinstance(item, str) and item in PERMISSION_CLASSES
+                    for item in ctx["session_policy"]
+                )
+            )
+        )
+        and (
+            ctx.get("allowed_tool_names") is None
+            or (
+                isinstance(ctx.get("allowed_tool_names"), list)
+                and all(
+                    isinstance(item, str) and bool(item)
+                    for item in ctx["allowed_tool_names"]
+                )
+            )
+        )
     )
+    if not context_shape_valid:
+        invocations.update_status(
+            inv.invocation_id,
+            status="denied",
+            error_text="Confirmation context is missing or malformed; failing closed.",
+        )
+        flash("Confirmation context missing; tool call denied (fail closed).", "error")
+        return redirect(
+            url_for("sessions.show_session", session_id=session_id)
+        )
+
+    assert isinstance(ctx, dict)  # narrowed by the fail-closed guard above
+    agent_harness = ctx["agent_harness_type"]
+    stored_session_policy: Optional[List[str]] = ctx["session_policy"]
+    stored_allowed_tool_names: Optional[List[str]] = ctx["allowed_tool_names"]
 
     cross_perms.grant(
         session_id=session_id,
@@ -554,7 +1073,7 @@ def confirm_tool_call(session_id: str):
         decision=_CONFIRM_DECISIONS[decision],  # type: ignore[arg-type]
     )
 
-    # Re-dispatch the original call.
+    # Re-dispatch the original call using only stored context.
     tool_repo = ToolRepository(conn)
     tool = tool_repo.get_by_id(inv.tool_id)
     if tool is None:
@@ -562,31 +1081,14 @@ def confirm_tool_call(session_id: str):
 
     dispatcher = ToolDispatcher(conn)
     tool_call = reconstruct_tool_call(inv)
-    # The session policy isn't known here, so we pass a permissive
-    # default; the tool was already approved for the original call
-    # and the policy hasn't changed in the meantime.
-    session_policy_raw = request.form.get("session_policy", "")
-    if session_policy_raw:
-        session_policy = [p.strip() for p in session_policy_raw.split(",") if p.strip()]
-    else:
-        # Conservative default: allow anything that was on the
-        # permission-class side of the conversation.
-        session_policy = ["read_only", "write_local", "write_remote", "destructive"]
     result = dispatcher.dispatch(
         session_id=session_id,
         workspace_id=inv.workspace_id,
-        session_policy=session_policy,
+        session_policy=stored_session_policy,
         tool_call=tool_call,
         agent_harness_type=agent_harness,
+        allowed_tool_names=stored_allowed_tool_names,
     )
-
-    # For "once", consume the permission row so a second call asks again.
-    if decision == "yes_once" and agent_harness is not None:
-        cross_perms.consume_once(
-            session_id=session_id,
-            agent_harness_type=agent_harness,
-            tool_harness_type=inv.tool_harness_type,
-        )
 
     # Mark the original pending invocation as completed so the UI
     # hides the confirmation form on next render.  The actual

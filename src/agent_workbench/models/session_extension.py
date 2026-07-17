@@ -161,6 +161,22 @@ class SessionExtensionRepository:
             return None
         return self.get_by_id(session_id)
 
+    def update_fork_id(
+        self,
+        session_id: str,
+        *,
+        fork_id: Optional[str],
+    ) -> Optional[SessionExtension]:
+        """Link an existing session to a persisted fork record."""
+        cursor = self.conn.execute(
+            "UPDATE session_extensions SET fork_id = ? WHERE session_id = ?",
+            (fork_id, session_id),
+        )
+        self.conn.commit()
+        if cursor.rowcount == 0:
+            return None
+        return self.get_by_id(session_id)
+
     def update_task_spec(
         self,
         session_id: str,

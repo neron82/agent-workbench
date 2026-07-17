@@ -16,7 +16,6 @@ ehrliche ConnectionError when the binary is missing.
 from __future__ import annotations
 
 import os
-import subprocess
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -227,7 +226,6 @@ class TestHermesAdapterStart:
         argv = mock_popen.call_args.args[0]
         assert argv[0] == "/custom/hermes/bin/hermes"
         # And the persisted PID is the real one, not a kwarg override.
-        hr = repo.get_by_id("session-1")
         # The list above is filtered by session_id — pull the first
         # row instead.
         rows = HarnessRunRepository(adapter.conn).list_by_session("session-1")

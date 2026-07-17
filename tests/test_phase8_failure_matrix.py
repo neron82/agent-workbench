@@ -41,7 +41,6 @@ from __future__ import annotations
 import sqlite3
 import time
 import uuid
-from typing import List
 
 import pytest
 
@@ -57,12 +56,10 @@ from agent_workbench.services.fork_service import ForkService
 from agent_workbench.services.replay_service import ReplayService
 from agent_workbench.services.review_service import (
     ReviewService,
-    VERDICT_FAIL,
     VERDICT_PASS,
 )
 from agent_workbench.services.routing_service import (
     RoutingService,
-    SOURCE_TYPE_AGENT,
     SOURCE_TYPE_ORCHESTRATOR,
     SOURCE_TYPE_USER,
     SOURCE_TYPE_WORKER,
@@ -528,7 +525,7 @@ class TestScenario2FailedOrCancelledRunNotReady:
 
         # Re-use the same session id so the aggregation has two runs
         # under one session.
-        run_id2 = HarnessRunRepository(verify_svc.conn).create(
+        HarnessRunRepository(verify_svc.conn).create(
             workspace_id=workspace_a,
             session_id=sess_id1,
             harness_type="hermes",

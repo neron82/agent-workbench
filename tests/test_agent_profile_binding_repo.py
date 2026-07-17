@@ -4,7 +4,6 @@ import sqlite3
 
 from agent_workbench.models.agent_profile import AgentProfileRepository
 from agent_workbench.models.agent_profile_binding import (
-    AgentProfileBinding,
     AgentProfileBindingRepository,
 )
 

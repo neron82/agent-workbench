@@ -5,10 +5,8 @@ from __future__ import annotations
 import sqlite3
 import time
 
-import pytest
 
 from agent_workbench.adapters.shell import ShellAdapter
-from agent_workbench.adapters.base import AdapterCapabilities
 from agent_workbench.models.workspace import WorkspaceRepository
 
 
