@@ -837,14 +837,25 @@ function showAc(input, query) {
   }
   if (matched.length === 0) { dd.style.display = 'none'; return; }
 
-  var html = '';
+  dd.replaceChildren();
   for (var i = 0; i < matched.length; i++) {
-    html += '<div class="ac-item" onmousedown="event.preventDefault(); insertAcFromClick(this)">'
-         + '<span>@' + matched[i] + '</span>'
-         + '<span class="ac-badge">agent</span>'
-         + '</div>';
+    var item = document.createElement('div');
+    item.className = 'ac-item';
+    item.addEventListener('mousedown', function(event) {
+      event.preventDefault();
+      insertAcFromClick(this);
+    });
+
+    var nameSpan = document.createElement('span');
+    nameSpan.textContent = '@' + matched[i];
+    item.appendChild(nameSpan);
+
+    var badge = document.createElement('span');
+    badge.className = 'ac-badge';
+    badge.textContent = 'agent';
+    item.appendChild(badge);
+    dd.appendChild(item);
   }
-  dd.innerHTML = html;
   dd.style.display = 'block';
   acSelectedIndex = -1;
 }

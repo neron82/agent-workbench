@@ -146,6 +146,12 @@ class TestKeyboardShortcutsOverlay:
         assert "cancel" not in html.lower() or "cancel agent" not in html.lower()
         assert "side.classList.contains('open')" in html
 
+    def test_autocomplete_renders_agent_names_as_text_not_html(self, app, client):
+        html = _render_session_view(app, client)
+        assert "nameSpan.textContent = '@' + matched[i]" in html
+        assert "'<span>@' + matched[i] + '</span>'" not in html
+        assert 'onmousedown="event.preventDefault(); insertAcFromClick(this)"' not in html
+
     def test_global_at_shortcut_focuses_chat_input(self, app, client):
         html = _render_session_view(app, client)
         # Must have a global keydown handler for @
